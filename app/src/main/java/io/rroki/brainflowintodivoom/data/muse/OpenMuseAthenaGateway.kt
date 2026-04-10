@@ -46,20 +46,34 @@ class OpenMuseAthenaGateway(
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
 
     private val lock = Any()
+    private var streamProfile: MuseStreamProfile = MuseStreamProfile.EEG_ONLY
     private var gatt: BluetoothGatt? = null
     private var controlCharacteristic: BluetoothGattCharacteristic? = null
     private var eegCharacteristic: BluetoothGattCharacteristic? = null
     private var otherCharacteristic: BluetoothGattCharacteristic? = null
 
     private val eegSignal = ArrayDeque<Double>(MAX_SIGNAL_BUFFER)
+    private val ppgRedSignal = ArrayDeque<Double>(MAX_PPG_BUFFER)
+    private val ppgIrSignal = ArrayDeque<Double>(MAX_PPG_BUFFER)
+    private val ppgAmbientSignal = ArrayDeque<Double>(MAX_PPG_BUFFER)
     private val eegPendingBytes = ArrayList<Byte>()
     private val otherPendingBytes = ArrayList<Byte>()
     private var latestDominantBand: BrainBand = BrainBand.ALPHA
     private var latestNormalizedAlpha: Double = 0.0
+    private var latestDeltaPower: Double = 0.0
+    private var latestThetaPower: Double = 0.0
+    private var latestAlphaPower: Double = 0.0
+    private var latestBetaPower: Double = 0.0
+    private var latestGammaPower: Double = 0.0
+    private var latestFocusScorePos: Double = 0.5
+    private var latestRelaxScorePos: Double = 0.5
     private var latestActivity: Double = 0.0
     private var latestAlphaRatio: Double = 0.0
     private var latestDominantRatio: Double = 0.0
     private var latestTotalPower: Double = 0.0
+    private var latestHeartBpm: Double = 0.0
+    private var latestOxygenPercent: Double = 0.0
+    private var latestNirsIndex: Double = 0.0
     private var notificationCount: Long = 0L
     private var eegNotificationCount: Long = 0L
     private var otherNotificationCount: Long = 0L
@@ -77,9 +91,16 @@ class OpenMuseAthenaGateway(
         gatt != null && controlCharacteristic != null && eegCharacteristic != null
     }
 
+    override fun configureStreamProfile(profile: MuseStreamProfile) {
+        synchronized(lock) {
+            streamProfile = profile
+        }
+    }
+
     override suspend fun connect(deviceAddress: String?): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             check(isRuntimeAvailable()) { "Bluetooth LE is unavailable on this device" }
+            val profile = synchronized(lock) { streamProfile }
 
             disconnectInternal()
 
@@ -106,14 +127,27 @@ class OpenMuseAthenaGateway(
                 eegCharacteristic = eeg
                 otherCharacteristic = other
                 eegSignal.clear()
+                ppgRedSignal.clear()
+                ppgIrSignal.clear()
+                ppgAmbientSignal.clear()
                 eegPendingBytes.clear()
                 otherPendingBytes.clear()
                 latestDominantBand = BrainBand.ALPHA
                 latestNormalizedAlpha = 0.0
+                latestDeltaPower = 0.0
+                latestThetaPower = 0.0
+                latestAlphaPower = 0.0
+                latestBetaPower = 0.0
+                latestGammaPower = 0.0
+                latestFocusScorePos = 0.5
+                latestRelaxScorePos = 0.5
                 latestActivity = 0.0
                 latestAlphaRatio = 0.0
                 latestDominantRatio = 0.0
                 latestTotalPower = 0.0
+                latestHeartBpm = 0.0
+                latestOxygenPercent = 0.0
+                latestNirsIndex = 0.0
                 notificationCount = 0L
                 eegNotificationCount = 0L
                 otherNotificationCount = 0L
@@ -122,7 +156,9 @@ class OpenMuseAthenaGateway(
             }
 
             enableNotification(connectedGatt, eeg)
-            enableNotification(connectedGatt, other)
+            if (profile.enableOtherNotifications) {
+                enableNotification(connectedGatt, other)
+            }
             enableNotification(connectedGatt, control)
 
             // OpenMuse-inspired handshake sequence.
@@ -132,7 +168,7 @@ class OpenMuseAthenaGateway(
             delay(200)
             sendControlToken("h")
             delay(200)
-            sendControlToken(DEFAULT_PRESET)
+            sendControlToken(profile.presetToken)
             delay(200)
             sendControlToken("s")
             delay(200)
@@ -140,8 +176,10 @@ class OpenMuseAthenaGateway(
             delay(50)
             sendControlToken("dc001")
             delay(100)
-            sendControlToken("L1")
-            delay(300)
+            if (profile.enableLowLatency) {
+                sendControlToken("L1")
+                delay(300)
+            }
             sendControlToken("s")
         }
     }
@@ -156,10 +194,22 @@ class OpenMuseAthenaGateway(
         val interval = max(40L, pollIntervalMs)
         while (currentCoroutineContext().isActive) {
             val reading = synchronized(lock) {
+                recomputeBiometricsLocked()
                 if (eegSignal.isEmpty()) {
                     MuseReading(
                         normalizedAlpha = 0.0,
                         dominantBand = latestDominantBand,
+                        deltaPower = latestDeltaPower,
+                        thetaPower = latestThetaPower,
+                        alphaPower = latestAlphaPower,
+                        betaPower = latestBetaPower,
+                        gammaPower = latestGammaPower,
+                        focusScorePos = latestFocusScorePos,
+                        relaxScorePos = latestRelaxScorePos,
+                        heartBpm = latestHeartBpm,
+                        oxygenPercent = latestOxygenPercent,
+                        nirsIndex = latestNirsIndex,
+                        ppgSampleCount = ppgIrSignal.size,
                         eegSampleCount = 0,
                         notificationCount = notificationCount,
                         eegNotificationCount = eegNotificationCount,
@@ -176,6 +226,17 @@ class OpenMuseAthenaGateway(
                     MuseReading(
                         normalizedAlpha = latestNormalizedAlpha,
                         dominantBand = latestDominantBand,
+                        deltaPower = latestDeltaPower,
+                        thetaPower = latestThetaPower,
+                        alphaPower = latestAlphaPower,
+                        betaPower = latestBetaPower,
+                        gammaPower = latestGammaPower,
+                        focusScorePos = latestFocusScorePos,
+                        relaxScorePos = latestRelaxScorePos,
+                        heartBpm = latestHeartBpm,
+                        oxygenPercent = latestOxygenPercent,
+                        nirsIndex = latestNirsIndex,
+                        ppgSampleCount = ppgIrSignal.size,
                         eegSampleCount = eegSignal.size,
                         notificationCount = notificationCount,
                         eegNotificationCount = eegNotificationCount,
@@ -452,19 +513,50 @@ class OpenMuseAthenaGateway(
 
         val subpackets = parseSubpackets(combined)
         var appendedSamplesFromSubpackets = 0
+        var handledStructuredPacket = false
         if (subpackets.isNotEmpty()) {
             synchronized(lock) {
                 subpackets.forEach { subpacket ->
-                    if (subpacket.tag != TAG_EEG_4 && subpacket.tag != TAG_EEG_8) {
-                        return@forEach
-                    }
+                    when (subpacket.tag) {
+                        TAG_EEG_4,
+                        TAG_EEG_8 -> {
+                            val nChannels = if (subpacket.tag == TAG_EEG_4) 4 else 8
+                            val decoded = decodeEegData(subpacket.data, nChannels) ?: return@forEach
+                            appendedSamplesFromSubpackets += appendDecodedSamplesLocked(decoded)
+                            handledStructuredPacket = true
+                        }
 
-                    val nChannels = if (subpacket.tag == TAG_EEG_4) 4 else 8
-                    val decoded = decodeEegData(subpacket.data, nChannels) ?: return@forEach
-                    appendedSamplesFromSubpackets += appendDecodedSamplesLocked(decoded)
+                        TAG_OPTICS_4,
+                        TAG_OPTICS_8,
+                        TAG_OPTICS_16 -> {
+                            val nChannels = when (subpacket.tag) {
+                                TAG_OPTICS_4 -> 4
+                                TAG_OPTICS_8 -> 8
+                                else -> 16
+                            }
+                            val optics = decodeOpticsData(subpacket.data, nChannels) ?: return@forEach
+                            appendOpticsSamplesLocked(optics, nChannels)
+                            handledStructuredPacket = true
+                        }
+                    }
                 }
             }
-            if (appendedSamplesFromSubpackets > 0) {
+            if (handledStructuredPacket && appendedSamplesFromSubpackets > 0) {
+                return
+            }
+            if (handledStructuredPacket && streamProfile.enableOtherNotifications) {
+                return
+            }
+        }
+
+        if (uuid == UUID_OTHER) {
+            val decodedOptics = decodeOpticsFromRawPayload(combined)
+            if (decodedOptics.isNotEmpty()) {
+                synchronized(lock) {
+                    decodedOptics.forEach { decoded ->
+                        appendOpticsSamplesLocked(decoded.samples, decoded.nChannels)
+                    }
+                }
                 return
             }
         }
@@ -546,6 +638,84 @@ class OpenMuseAthenaGateway(
         return decoded
     }
 
+    private fun decodeOpticsFromRawPayload(payload: ByteArray): List<DecodedOpticsPacket> {
+        if (payload.isEmpty()) {
+            return emptyList()
+        }
+
+        val decoded = ArrayList<DecodedOpticsPacket>()
+
+        // Format A: [TAG][4-byte subheader][payload], repeated.
+        if (payload.size >= SUBPACKET_HEADER_SIZE + 30) {
+            var offset = 0
+            while (offset + SUBPACKET_HEADER_SIZE + 30 <= payload.size) {
+                val tag = payload[offset].toInt() and 0xFF
+                val nChannels = when (tag) {
+                    TAG_OPTICS_4 -> 4
+                    TAG_OPTICS_8 -> 8
+                    TAG_OPTICS_16 -> 16
+                    else -> break
+                }
+                val bytesNeeded = if (nChannels == 4) 30 else 40
+                if (offset + SUBPACKET_HEADER_SIZE + bytesNeeded > payload.size) {
+                    break
+                }
+
+                val dataStart = offset + SUBPACKET_HEADER_SIZE
+                val dataEnd = dataStart + bytesNeeded
+                val data = payload.copyOfRange(dataStart, dataEnd)
+                decodeOpticsData(data, nChannels)?.let { samples ->
+                    if (hasOpticsVariance(samples)) {
+                        decoded.add(DecodedOpticsPacket(samples = samples, nChannels = nChannels))
+                    }
+                }
+                offset = dataEnd
+            }
+
+            if (decoded.isNotEmpty()) {
+                return decoded
+            }
+        }
+
+        // Format B: plain 30-byte (4ch) or 40-byte (8/16ch) chunks.
+        var cursor = 0
+        while (cursor + 30 <= payload.size) {
+            var consumed = false
+
+            decodeOpticsData(payload.copyOfRange(cursor, cursor + 30), 4)?.let { samples ->
+                if (hasOpticsVariance(samples)) {
+                    decoded.add(DecodedOpticsPacket(samples = samples, nChannels = 4))
+                    cursor += 30
+                    consumed = true
+                }
+            }
+            if (consumed) {
+                continue
+            }
+
+            if (cursor + 40 <= payload.size) {
+                val chunk40 = payload.copyOfRange(cursor, cursor + 40)
+                val decoded16 = decodeOpticsData(chunk40, 16)
+                if (decoded16 != null && hasOpticsVariance(decoded16)) {
+                    decoded.add(DecodedOpticsPacket(samples = decoded16, nChannels = 16))
+                    cursor += 40
+                    continue
+                }
+
+                val decoded8 = decodeOpticsData(chunk40, 8)
+                if (decoded8 != null && hasOpticsVariance(decoded8)) {
+                    decoded.add(DecodedOpticsPacket(samples = decoded8, nChannels = 8))
+                    cursor += 40
+                    continue
+                }
+            }
+
+            cursor += 1
+        }
+
+        return decoded
+    }
+
     private fun hasSignalVariance(decoded: Array<DoubleArray>): Boolean {
         var sum = 0.0
         var sumSq = 0.0
@@ -566,6 +736,28 @@ class OpenMuseAthenaGateway(
         val mean = sum / count.toDouble()
         val variance = (sumSq / count.toDouble()) - (mean * mean)
         return variance > 1e-6
+    }
+
+    private fun hasOpticsVariance(decoded: Array<DoubleArray>): Boolean {
+        var sum = 0.0
+        var sumSq = 0.0
+        var count = 0
+
+        decoded.forEach { row ->
+            row.forEach { value ->
+                sum += value
+                sumSq += value * value
+                count += 1
+            }
+        }
+
+        if (count <= 1) {
+            return false
+        }
+
+        val mean = sum / count.toDouble()
+        val variance = (sumSq / count.toDouble()) - (mean * mean)
+        return variance > 1e-10
     }
 
     private fun drainCompletePacketsLocked(pending: MutableList<Byte>): List<ByteArray> {
@@ -684,6 +876,201 @@ class OpenMuseAthenaGateway(
         return decoded
     }
 
+    private fun decodeOpticsData(dataBytes: ByteArray, nChannels: Int): Array<DoubleArray>? {
+        val nSamples: Int
+        val bytesNeeded: Int
+        when (nChannels) {
+            4 -> {
+                nSamples = 3
+                bytesNeeded = 30
+            }
+
+            8 -> {
+                nSamples = 2
+                bytesNeeded = 40
+            }
+
+            16 -> {
+                nSamples = 1
+                bytesNeeded = 40
+            }
+
+            else -> return null
+        }
+
+        if (dataBytes.size < bytesNeeded) {
+            return null
+        }
+
+        val bits = bytesToBits(dataBytes, bytesNeeded)
+        val decoded = Array(nSamples) { DoubleArray(nChannels) }
+
+        for (sampleIndex in 0 until nSamples) {
+            for (channelIndex in 0 until nChannels) {
+                val bitStart = (sampleIndex * nChannels + channelIndex) * 20
+                val intValue = extractPackedInt(bits, bitStart, 20)
+                decoded[sampleIndex][channelIndex] = intValue * OPTICS_SCALE
+            }
+        }
+
+        return decoded
+    }
+
+    private fun appendOpticsSamplesLocked(samples: Array<DoubleArray>, nChannels: Int) {
+        samples.forEach { row ->
+            if (row.isEmpty()) {
+                return@forEach
+            }
+
+            val ir = when (nChannels) {
+                4 -> (row[2] + row[3]) / 2.0
+                8 -> (row[2] + row[3] + row[6] + row[7]) / 4.0
+                else -> {
+                    var sum = 0.0
+                    for (index in OPTICS_IR_INDICES) {
+                        sum += row[index]
+                    }
+                    sum / OPTICS_IR_INDICES.size.toDouble()
+                }
+            }
+
+            val red = if (nChannels >= 16) {
+                var sum = 0.0
+                for (index in OPTICS_RED_INDICES) {
+                    sum += row[index]
+                }
+                sum / OPTICS_RED_INDICES.size.toDouble()
+            } else {
+                ir
+            }
+
+            val ambient = if (nChannels >= 16) {
+                var sum = 0.0
+                for (index in OPTICS_AMB_INDICES) {
+                    sum += row[index]
+                }
+                sum / OPTICS_AMB_INDICES.size.toDouble()
+            } else {
+                0.0
+            }
+
+            if (ppgIrSignal.size >= MAX_PPG_BUFFER) {
+                ppgIrSignal.removeFirst()
+            }
+            if (ppgRedSignal.size >= MAX_PPG_BUFFER) {
+                ppgRedSignal.removeFirst()
+            }
+            if (ppgAmbientSignal.size >= MAX_PPG_BUFFER) {
+                ppgAmbientSignal.removeFirst()
+            }
+
+            ppgIrSignal.addLast(ir)
+            ppgRedSignal.addLast(red)
+            ppgAmbientSignal.addLast(ambient)
+        }
+    }
+
+    private fun recomputeBiometricsLocked() {
+        if (ppgIrSignal.size < MIN_PPG_WINDOW) {
+            return
+        }
+
+        val windowSize = min(ppgIrSignal.size, PPG_HEART_WINDOW)
+        val irWindow = recentSamplesLocked(ppgIrSignal, windowSize)
+        val redWindow = recentSamplesLocked(ppgRedSignal, windowSize)
+        val ambWindow = recentSamplesLocked(ppgAmbientSignal, windowSize)
+
+        val centeredIr = centerSignal(irWindow)
+        val centeredRed = centerSignal(redWindow)
+        val bpmEstimate = estimateHeartBpm(centeredIr)
+        if (bpmEstimate > 0.0) {
+            latestHeartBpm = if (latestHeartBpm <= 0.0) {
+                bpmEstimate
+            } else {
+                (latestHeartBpm * 0.85) + (bpmEstimate * 0.15)
+            }
+        }
+
+        val irMean = irWindow.average().coerceAtLeast(1e-9)
+        val redMean = redWindow.average().coerceAtLeast(1e-9)
+        val ambMean = if (ambWindow.isNotEmpty()) ambWindow.average() else 0.0
+
+        val irDc = irWindow.map { sample -> abs(sample) }.average().coerceAtLeast(1e-9)
+        val redDc = redWindow.map { sample -> abs(sample) }.average().coerceAtLeast(1e-9)
+        val irAc = signalStd(centeredIr).coerceAtLeast(1e-9)
+        val redAc = signalStd(centeredRed).coerceAtLeast(1e-9)
+
+        val ratioR = ((redAc / redDc) / (irAc / irDc)).coerceIn(0.2, 3.0)
+        val spo2Percent = (110.0 - (25.0 * ratioR)).coerceIn(75.0, 100.0)
+
+        val contrastProxy = (1.05 - (redMean / irMean)).coerceIn(0.0, 1.0)
+        val oxygenProxy = if (spo2Percent.isFinite()) {
+            (spo2Percent / 100.0).coerceIn(0.0, 1.0)
+        } else {
+            contrastProxy
+        }
+        latestOxygenPercent = (latestOxygenPercent * 0.85) + (oxygenProxy * 0.15)
+
+        val hemoContrast = ((irMean - ambMean) / (irMean + ambMean + 1e-9)).coerceIn(-1.0, 1.0)
+        val nirs = ((hemoContrast + 1.0) / 2.0).coerceIn(0.0, 1.0)
+        latestNirsIndex = (latestNirsIndex * 0.85) + (nirs * 0.15)
+    }
+
+    private fun recentSamplesLocked(source: ArrayDeque<Double>, count: Int): DoubleArray {
+        if (count <= 0 || source.isEmpty()) {
+            return DoubleArray(0)
+        }
+
+        val start = (source.size - count).coerceAtLeast(0)
+        val out = DoubleArray(source.size - start)
+        var readIndex = 0
+        var writeIndex = 0
+        source.forEach { value ->
+            if (readIndex >= start) {
+                out[writeIndex++] = value
+            }
+            readIndex += 1
+        }
+        return out
+    }
+
+    private fun estimateHeartBpm(centeredIrSignal: DoubleArray): Double {
+        if (centeredIrSignal.size < MIN_PPG_WINDOW) {
+            return 0.0
+        }
+
+        val mean = centeredIrSignal.average()
+        var varianceSum = 0.0
+        centeredIrSignal.forEach { value ->
+            val diff = value - mean
+            varianceSum += diff * diff
+        }
+        val std = sqrt(varianceSum / centeredIrSignal.size.toDouble()).coerceAtLeast(1e-9)
+        val threshold = mean + (std * 0.2)
+        val minPeakDistance = max(1, (PPG_SAMPLE_RATE * 60 / MAX_HEART_BPM).toInt())
+
+        var lastPeak = -minPeakDistance
+        var peakCount = 0
+        for (index in 1 until centeredIrSignal.size - 1) {
+            val current = centeredIrSignal[index]
+            if (current > threshold &&
+                current >= centeredIrSignal[index - 1] &&
+                current > centeredIrSignal[index + 1] &&
+                index - lastPeak >= minPeakDistance
+            ) {
+                peakCount += 1
+                lastPeak = index
+            }
+        }
+
+        val seconds = centeredIrSignal.size.toDouble() / PPG_SAMPLE_RATE.toDouble()
+        if (seconds <= 0.0) {
+            return 0.0
+        }
+
+        return (peakCount * 60.0 / seconds).coerceIn(MIN_HEART_BPM, MAX_HEART_BPM)
+    }
+
     private fun bytesToBits(dataBytes: ByteArray, nBytes: Int): IntArray {
         val actual = min(nBytes, dataBytes.size)
         val bits = IntArray(actual * 8)
@@ -713,6 +1100,13 @@ class OpenMuseAthenaGateway(
         if (signal.size < MIN_SIGNAL_WINDOW) {
             latestNormalizedAlpha = 0.0
             latestDominantBand = BrainBand.ALPHA
+            latestDeltaPower = 0.0
+            latestThetaPower = 0.0
+            latestAlphaPower = 0.0
+            latestBetaPower = 0.0
+            latestGammaPower = 0.0
+            latestFocusScorePos = 0.5
+            latestRelaxScorePos = 0.5
             return
         }
 
@@ -726,6 +1120,8 @@ class OpenMuseAthenaGateway(
         )
 
         val alpha = bandPowers[BrainBand.ALPHA] ?: 0.0
+        val theta = bandPowers[BrainBand.THETA] ?: 0.0
+        val beta = bandPowers[BrainBand.BETA] ?: 0.0
         val dominantEntry = bandPowers.maxByOrNull { entry -> entry.value }
         latestDominantBand = dominantEntry?.key ?: BrainBand.ALPHA
         val dominantPower = dominantEntry?.value ?: 0.0
@@ -733,11 +1129,22 @@ class OpenMuseAthenaGateway(
         val totalPower = bandPowers.values.sum()
         latestTotalPower = totalPower
         if (totalPower > 1e-9) {
+            latestDeltaPower = (bandPowers[BrainBand.DELTA] ?: 0.0) / totalPower
+            latestThetaPower = theta / totalPower
+            latestAlphaPower = alpha / totalPower
+            latestBetaPower = beta / totalPower
+            latestGammaPower = (bandPowers[BrainBand.GAMMA] ?: 0.0) / totalPower
+
             val alphaRatio = (alpha / totalPower).coerceIn(0.0, 1.0)
             val dominantRatio = (dominantPower / totalPower).coerceIn(0.0, 1.0)
             latestAlphaRatio = alphaRatio
             latestDominantRatio = dominantRatio
             latestNormalizedAlpha = ((alphaRatio * 0.55) + (dominantRatio * 0.45)).coerceIn(0.0, 1.0)
+
+            val focusSigned = tanhLogRatio(beta, theta, 1.1)
+            val relaxSigned = tanhLogRatio(alpha, theta, 1.1)
+            latestFocusScorePos = ((focusSigned + 1.0) / 2.0).coerceIn(0.0, 1.0)
+            latestRelaxScorePos = ((relaxSigned + 1.0) / 2.0).coerceIn(0.0, 1.0)
             return
         }
 
@@ -754,9 +1161,22 @@ class OpenMuseAthenaGateway(
         }
         val instantActivity = rms + (slope * 0.7)
         latestActivity = (latestActivity * 0.85) + (instantActivity * 0.15)
+        latestDeltaPower = 0.0
+        latestThetaPower = 0.0
+        latestAlphaPower = 0.0
+        latestBetaPower = 0.0
+        latestGammaPower = 0.0
+        latestFocusScorePos = 0.5
+        latestRelaxScorePos = 0.5
         latestAlphaRatio = 0.0
         latestDominantRatio = 0.0
         latestNormalizedAlpha = (latestActivity / (latestActivity + 35.0)).coerceIn(0.0, 1.0)
+    }
+
+    private fun tanhLogRatio(numerator: Double, denominator: Double, scale: Double): Double {
+        val safeDenominator = denominator.coerceAtLeast(1e-9)
+        val safeRatio = (numerator / safeDenominator).coerceAtLeast(1e-9)
+        return kotlin.math.tanh(scale * kotlin.math.ln(safeRatio))
     }
 
     private fun centerSignal(signal: DoubleArray): DoubleArray {
@@ -766,6 +1186,19 @@ class OpenMuseAthenaGateway(
 
         val mean = signal.sum() / signal.size
         return DoubleArray(signal.size) { index -> signal[index] - mean }
+    }
+
+    private fun signalStd(signal: DoubleArray): Double {
+        if (signal.isEmpty()) {
+            return 0.0
+        }
+        val mean = signal.average()
+        var variance = 0.0
+        signal.forEach { value ->
+            val diff = value - mean
+            variance += diff * diff
+        }
+        return sqrt(variance / signal.size.toDouble())
     }
 
     private fun calculateBandPower(
@@ -882,14 +1315,27 @@ class OpenMuseAthenaGateway(
             eegCharacteristic = null
             otherCharacteristic = null
             eegSignal.clear()
+            ppgRedSignal.clear()
+            ppgIrSignal.clear()
+            ppgAmbientSignal.clear()
             eegPendingBytes.clear()
             otherPendingBytes.clear()
             latestDominantBand = BrainBand.ALPHA
             latestNormalizedAlpha = 0.0
+            latestDeltaPower = 0.0
+            latestThetaPower = 0.0
+            latestAlphaPower = 0.0
+            latestBetaPower = 0.0
+            latestGammaPower = 0.0
+            latestFocusScorePos = 0.5
+            latestRelaxScorePos = 0.5
             latestActivity = 0.0
             latestAlphaRatio = 0.0
             latestDominantRatio = 0.0
             latestTotalPower = 0.0
+            latestHeartBpm = 0.0
+            latestOxygenPercent = 0.0
+            latestNirsIndex = 0.0
             notificationCount = 0L
             eegNotificationCount = 0L
             otherNotificationCount = 0L
@@ -913,6 +1359,11 @@ class OpenMuseAthenaGateway(
         val other: BluetoothGattCharacteristic
     )
 
+    private data class DecodedOpticsPacket(
+        val samples: Array<DoubleArray>,
+        val nChannels: Int
+    )
+
     private companion object {
         private const val DEFAULT_PRESET = "p1041"
 
@@ -922,6 +1373,13 @@ class OpenMuseAthenaGateway(
         private const val MAX_SIGNAL_BUFFER = 512
         private const val EEG_SAMPLE_RATE = 256
         private const val EEG_SCALE_UV = 1450.0 / 16383.0
+        private const val OPTICS_SCALE = 1.0 / 32768.0
+        private const val PPG_SAMPLE_RATE = 64
+        private const val MIN_PPG_WINDOW = 96
+        private const val PPG_HEART_WINDOW = PPG_SAMPLE_RATE * 6
+        private const val MAX_PPG_BUFFER = PPG_SAMPLE_RATE * 120
+        private const val MIN_HEART_BPM = 40.0
+        private const val MAX_HEART_BPM = 180.0
 
         private const val TAG_EEG_4 = 0x11
         private const val TAG_EEG_8 = 0x12
@@ -933,6 +1391,10 @@ class OpenMuseAthenaGateway(
         private const val TAG_BATTERY_98 = 0x98
         private const val MAX_PACKET_LENGTH = 255
         private const val MAX_PENDING_BYTES = 4096
+
+        private val OPTICS_IR_INDICES = intArrayOf(2, 3, 6, 7)
+        private val OPTICS_RED_INDICES = intArrayOf(8, 9, 12, 13)
+        private val OPTICS_AMB_INDICES = intArrayOf(10, 11, 14, 15)
 
         private val UUID_MUSE_SERVICE: UUID = UUID.fromString("273e0000-4c4d-454d-96be-f03bac821358")
         private val UUID_CONTROL: UUID = UUID.fromString("273e0001-4c4d-454d-96be-f03bac821358")

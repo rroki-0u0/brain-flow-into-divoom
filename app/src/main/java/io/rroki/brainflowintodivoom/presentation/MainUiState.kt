@@ -1,7 +1,9 @@
 package io.rroki.brainflowintodivoom.presentation
 
 import io.rroki.brainflowintodivoom.domain.model.BrainBand
+import io.rroki.brainflowintodivoom.domain.model.BfiWaveformParameter
 import io.rroki.brainflowintodivoom.domain.model.DisplayMode
+import io.rroki.brainflowintodivoom.domain.model.MusePowerMode
 
 data class DivoomDeviceOption(
     val name: String,
@@ -11,6 +13,12 @@ data class DivoomDeviceOption(
 
 data class MainUiState(
     val mode: DisplayMode = DisplayMode.OSCILLOSCOPE,
+    val selectedWaveformParameter: BfiWaveformParameter = BfiWaveformParameter.PWR_AVG_ALPHA,
+    val selectedPowerMode: MusePowerMode = MusePowerMode.AUTO,
+    val effectiveMuseProfileLabel: String = "EEG Only",
+    val selectedParameterOscPath: String = BfiWaveformParameter.PWR_AVG_ALPHA.oscPath,
+    val selectedParameterValue: Double = 0.0,
+    val selectedParameterUnit: String = BfiWaveformParameter.PWR_AVG_ALPHA.unit,
     val dominantBand: BrainBand = BrainBand.ALPHA,
     val normalizedValue: Double = 0.5,
     val frame: IntArray = IntArray(16 * 16) { 0xFF04070D.toInt() },
@@ -31,6 +39,9 @@ data class MainUiState(
     val museDominantRatio: Double = 0.0,
     val museTotalPower: Double = 0.0,
     val museActivity: Double = 0.0,
+    val musePpgSampleCount: Int = 0,
+    val museHeartBpm: Double = 0.0,
+    val museOxygenPercent: Double = 0.0,
     val musePacketPreviewHex: String = "-",
     val brainFlowRuntimeAvailable: Boolean = false,
     val sendIntervalMs: Long = 180L,

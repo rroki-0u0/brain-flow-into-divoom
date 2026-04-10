@@ -9,9 +9,12 @@ import io.rroki.brainflowintodivoom.data.divoom.DivoomDiscoveredDevice
 import io.rroki.brainflowintodivoom.data.divoom.DivoomPacketEncoder
 import io.rroki.brainflowintodivoom.data.divoom.FrameDispatchQueue
 import io.rroki.brainflowintodivoom.data.muse.MuseStreamGateway
+import io.rroki.brainflowintodivoom.data.muse.MuseStreamProfile
 import io.rroki.brainflowintodivoom.data.muse.OpenMuseAthenaGateway
 import io.rroki.brainflowintodivoom.domain.model.BrainBand
+import io.rroki.brainflowintodivoom.domain.model.BfiWaveformParameter
 import io.rroki.brainflowintodivoom.domain.model.DisplayMode
+import io.rroki.brainflowintodivoom.domain.model.MusePowerMode
 import io.rroki.brainflowintodivoom.domain.processing.OscilloscopeFrameGenerator
 import io.rroki.brainflowintodivoom.domain.processing.VrchatLogoFrameGenerator
 import java.io.IOException
@@ -55,6 +58,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val encoder = DivoomPacketEncoder()
     private val divoomClient = DivoomBluetoothClient(application.applicationContext)
     private val museGateway: MuseStreamGateway = OpenMuseAthenaGateway(application.applicationContext)
+    private var activeMuseProfile: MuseStreamProfile = MuseStreamProfile.EEG_ONLY
     private var connectionState = DivoomConnectionState.DISCONNECTED
     private var museAdaptiveMin = 0.35
     private var museAdaptiveMax = 0.65
@@ -72,6 +76,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         frameQueue.start(viewModelScope)
+        val profile = resolveEffectiveProfile(_uiState.value)
+        activeMuseProfile = profile
+        museGateway.configureStreamProfile(profile)
+        _uiState.value = _uiState.value.copy(effectiveMuseProfileLabel = profile.label)
         startFakeStream()
     }
 
@@ -88,6 +96,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = current.copy(
             museConnectionStateText = "connecting",
             lastError = null
+        )
+
+        val targetProfile = resolveEffectiveProfile(current)
+        activeMuseProfile = targetProfile
+        museGateway.configureStreamProfile(targetProfile)
+        _uiState.value = _uiState.value.copy(
+            effectiveMuseProfileLabel = targetProfile.label,
+            selectedParameterOscPath = _uiState.value.selectedWaveformParameter.oscPath,
+            selectedParameterUnit = _uiState.value.selectedWaveformParameter.unit
         )
 
         viewModelScope.launch {
@@ -118,6 +135,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         museDominantRatio = 0.0,
                         museTotalPower = 0.0,
                         museActivity = 0.0,
+                        musePpgSampleCount = 0,
+                        museHeartBpm = 0.0,
+                        museOxygenPercent = 0.0,
                         musePacketPreviewHex = "-",
                         lastError = throwable.message ?: "Muse connection failed"
                     )
@@ -146,6 +166,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 museDominantRatio = 0.0,
                 museTotalPower = 0.0,
                 museActivity = 0.0,
+                musePpgSampleCount = 0,
+                museHeartBpm = 0.0,
+                museOxygenPercent = 0.0,
                 musePacketPreviewHex = "-"
             )
             startFakeStream()
@@ -278,6 +301,96 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun setWaveformParameter(parameter: BfiWaveformParameter) {
+        val updated = _uiState.value.copy(
+            selectedWaveformParameter = parameter,
+            selectedParameterOscPath = parameter.oscPath,
+            selectedParameterUnit = parameter.unit,
+            lastError = null
+        )
+        val effectiveProfile = resolveEffectiveProfile(updated)
+        activeMuseProfile = effectiveProfile
+        museGateway.configureStreamProfile(effectiveProfile)
+
+        _uiState.value = updated.copy(
+            effectiveMuseProfileLabel = effectiveProfile.label,
+            lastError = null
+        )
+
+        if (updated.isMuseConnected) {
+            reconnectMuseForProfileChange()
+        }
+    }
+
+    fun setMusePowerMode(mode: MusePowerMode) {
+        val updated = _uiState.value.copy(
+            selectedPowerMode = mode,
+            lastError = null
+        )
+        val effectiveProfile = resolveEffectiveProfile(updated)
+        activeMuseProfile = effectiveProfile
+        museGateway.configureStreamProfile(effectiveProfile)
+
+        _uiState.value = updated.copy(
+            effectiveMuseProfileLabel = effectiveProfile.label,
+            lastError = null
+        )
+
+        if (updated.isMuseConnected) {
+            reconnectMuseForProfileChange()
+        }
+    }
+
+    private fun reconnectMuseForProfileChange() {
+        val address = _uiState.value.museDeviceAddress.takeIf { it.isNotBlank() }
+        museStreamJob?.cancel()
+        museStreamJob = null
+
+        _uiState.value = _uiState.value.copy(
+            museConnectionStateText = "reconnecting",
+            lastError = null
+        )
+
+        viewModelScope.launch {
+            museGateway.disconnect()
+            museGateway.connect(address)
+                .onSuccess {
+                    resetMuseWaveNormalizer()
+                    _uiState.value = _uiState.value.copy(
+                        isMuseConnected = true,
+                        isUsingMuseStream = true,
+                        museConnectionStateText = "connected",
+                        autoSendEnabled = true,
+                        lastError = null
+                    )
+                    stopFakeStream()
+                    startMuseStreamCollection()
+                }
+                .onFailure { throwable ->
+                    _uiState.value = _uiState.value.copy(
+                        isMuseConnected = false,
+                        isUsingMuseStream = false,
+                        museConnectionStateText = "disconnected",
+                        museEegSampleCount = 0,
+                        museNotificationCount = 0L,
+                        museEegNotificationCount = 0L,
+                        museOtherNotificationCount = 0L,
+                        museLastPacketBytes = 0,
+                        museAlphaRatio = 0.0,
+                        museDominantRatio = 0.0,
+                        museTotalPower = 0.0,
+                        museActivity = 0.0,
+                        musePpgSampleCount = 0,
+                        museHeartBpm = 0.0,
+                        museOxygenPercent = 0.0,
+                        musePacketPreviewHex = "-",
+                        lastError = throwable.message ?: "Muse reconnect failed"
+                    )
+                    startFakeStream()
+                }
+        }
+    }
+
     private fun startFakeStream() {
         if (fakeStreamJob?.isActive == true) {
             return
@@ -298,8 +411,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 updateState(
                     mode = _uiState.value.mode,
                     value = value,
-                    band = band
+                    band = band,
+                    parameter = _uiState.value.selectedWaveformParameter,
+                    rawValue = value
                 )
+                _uiState.value = _uiState.value.copy(selectedParameterValue = value)
 
                 step++
                 delay(120L)
@@ -331,14 +447,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         museDominantRatio = 0.0,
                         museTotalPower = 0.0,
                         museActivity = 0.0,
+                        musePpgSampleCount = 0,
+                        museHeartBpm = 0.0,
+                        museOxygenPercent = 0.0,
                         musePacketPreviewHex = "-",
                         lastError = throwable.message ?: "Muse stream failed"
                     )
                     startFakeStream()
                 }
                 .collect { reading ->
+                    val selectedParameter = _uiState.value.selectedWaveformParameter
+                    val selection = mapSelectedWaveformValue(
+                        reading = reading,
+                        parameter = selectedParameter
+                    )
+
                     _uiState.value = _uiState.value.copy(
+                        selectedParameterValue = selection.rawValue,
                         museEegSampleCount = reading.eegSampleCount,
+                        selectedParameterOscPath = selectedParameter.oscPath,
+                        selectedParameterUnit = selectedParameter.unit,
                         museNotificationCount = reading.notificationCount,
                         museEegNotificationCount = reading.eegNotificationCount,
                         museOtherNotificationCount = reading.otherNotificationCount,
@@ -347,19 +475,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         museDominantRatio = reading.dominantRatio,
                         museTotalPower = reading.totalPower,
                         museActivity = reading.activity,
+                        musePpgSampleCount = reading.ppgSampleCount,
+                        museHeartBpm = reading.heartBpm,
+                        museOxygenPercent = (reading.oxygenPercent * 100.0).coerceIn(0.0, 100.0),
                         musePacketPreviewHex = reading.packetPreviewHex
                     )
 
-                    val normalizedForWave = normalizeMuseWaveValue(
-                        rawValue = reading.normalizedAlpha,
-                        band = reading.dominantBand
-                    )
+                    val normalizedForWave = when (selectedParameter) {
+                        BfiWaveformParameter.BIOMETRICS_HEART_BPM -> ((selection.rawValue - 45.0) / 90.0).coerceIn(0.0, 1.0)
+                        BfiWaveformParameter.BIOMETRICS_OXYGEN -> (selection.rawValue / 100.0).coerceIn(0.0, 1.0)
+                        else -> normalizeMuseWaveValue(
+                            rawValue = selection.normalized,
+                            band = reading.dominantBand
+                        )
+                    }
                     updateState(
                         mode = _uiState.value.mode,
                         value = normalizedForWave,
-                        band = reading.dominantBand
+                        band = reading.dominantBand,
+                        parameter = selectedParameter,
+                        rawValue = selection.rawValue
                     )
                 }
+        }
+    }
+
+    private data class WaveformValueSelection(
+        val rawValue: Double,
+        val normalized: Double
+    )
+
+    private fun mapSelectedWaveformValue(
+        reading: io.rroki.brainflowintodivoom.data.muse.MuseReading,
+        parameter: BfiWaveformParameter
+    ): WaveformValueSelection {
+        return when (parameter) {
+            BfiWaveformParameter.PWR_AVG_DELTA -> WaveformValueSelection(reading.deltaPower, reading.deltaPower)
+            BfiWaveformParameter.PWR_AVG_THETA -> WaveformValueSelection(reading.thetaPower, reading.thetaPower)
+            BfiWaveformParameter.PWR_AVG_ALPHA -> WaveformValueSelection(reading.alphaPower, reading.alphaPower)
+            BfiWaveformParameter.PWR_AVG_BETA -> WaveformValueSelection(reading.betaPower, reading.betaPower)
+            BfiWaveformParameter.PWR_AVG_GAMMA -> WaveformValueSelection(reading.gammaPower, reading.gammaPower)
+            BfiWaveformParameter.NEUROFB_FOCUS_AVG -> {
+                WaveformValueSelection(reading.focusScorePos, reading.focusScorePos)
+            }
+
+            BfiWaveformParameter.NEUROFB_RELAX_AVG -> {
+                WaveformValueSelection(reading.relaxScorePos, reading.relaxScorePos)
+            }
+
+            BfiWaveformParameter.BIOMETRICS_HEART_BPM -> {
+                val normalized = ((reading.heartBpm - 45.0) / 90.0).coerceIn(0.0, 1.0)
+                WaveformValueSelection(reading.heartBpm, normalized)
+            }
+
+            BfiWaveformParameter.BIOMETRICS_OXYGEN -> {
+                val percent = (reading.oxygenPercent * 100.0).coerceIn(0.0, 100.0)
+                WaveformValueSelection(percent, reading.oxygenPercent.coerceIn(0.0, 1.0))
+            }
+        }
+    }
+
+    private fun resolveEffectiveProfile(state: MainUiState): MuseStreamProfile {
+        return when (state.selectedPowerMode) {
+            MusePowerMode.EEG_ONLY -> MuseStreamProfile.EEG_ONLY
+            MusePowerMode.FULL_BIOMETRICS -> MuseStreamProfile.FULL_BIOMETRICS
+            MusePowerMode.AUTO -> {
+                if (state.selectedWaveformParameter.requiresOptics) {
+                    MuseStreamProfile.FULL_BIOMETRICS
+                } else {
+                    MuseStreamProfile.EEG_ONLY
+                }
+            }
         }
     }
 
@@ -401,8 +587,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateState(mode: DisplayMode, value: Double, band: BrainBand) {
+        updateState(
+            mode = mode,
+            value = value,
+            band = band,
+            parameter = _uiState.value.selectedWaveformParameter,
+            rawValue = _uiState.value.selectedParameterValue
+        )
+    }
+
+    private fun updateState(
+        mode: DisplayMode,
+        value: Double,
+        band: BrainBand,
+        parameter: BfiWaveformParameter,
+        rawValue: Double
+    ) {
         val frame = when (mode) {
-            DisplayMode.OSCILLOSCOPE -> oscilloscopeGenerator.pushNormalized(value)
+            DisplayMode.OSCILLOSCOPE -> {
+                when (parameter) {
+                    BfiWaveformParameter.BIOMETRICS_HEART_BPM -> buildHeartbeatFrame(rawValue)
+                    BfiWaveformParameter.BIOMETRICS_OXYGEN -> buildOxygenFrame(value)
+                    else -> tintOscilloscopeFrame(
+                        frame = oscilloscopeGenerator.pushNormalized(value),
+                        color = parameter.colorArgb
+                    )
+                }
+            }
+
             DisplayMode.VRCHAT_LOGO -> logoGenerator.buildFrame(band)
         }
         val packet = encoder.encodeFrame(frame)
@@ -421,6 +633,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 frameQueue.enqueue(packet)
             }
         }
+    }
+
+    private fun tintOscilloscopeFrame(frame: IntArray, color: Int): IntArray {
+        val tinted = frame.copyOf()
+        for (index in tinted.indices) {
+            if (tinted[index] == OSC_LINE_COLOR) {
+                tinted[index] = color
+            }
+        }
+        return tinted
+    }
+
+    private fun buildHeartbeatFrame(rawBpm: Double): IntArray {
+        val bpm = rawBpm.coerceIn(40.0, 180.0).takeIf { it > 0.0 } ?: 72.0
+        val periodMs = (60_000.0 / bpm).toLong().coerceAtLeast(250L)
+        val phase = System.currentTimeMillis() % periodMs
+        val onBeat = phase < (periodMs * 0.18)
+
+        val background = 0xFF08090F.toInt()
+        val bodyColor = if (onBeat) 0xFFFF3B5C.toInt() else 0xFF4A1A29.toInt()
+        val glowColor = if (onBeat) 0xFFFFA3B5.toInt() else 0xFF6D3142.toInt()
+        val frame = IntArray(16 * 16) { background }
+
+        HEART_MASK.forEachIndexed { y, row ->
+            row.forEachIndexed { x, cell ->
+                if (cell == '1') {
+                    frame[(y * 16) + x] = bodyColor
+                } else if (cell == '2') {
+                    frame[(y * 16) + x] = glowColor
+                }
+            }
+        }
+        return frame
+    }
+
+    private fun buildOxygenFrame(level: Double): IntArray {
+        val normalized = level.coerceIn(0.0, 1.0)
+        val frame = IntArray(16 * 16) { 0xFF040913.toInt() }
+        val centerX = 7.5
+        val centerY = 7.5
+        val radius = 7.4
+
+        for (y in 0 until 16) {
+            for (x in 0 until 16) {
+                val dx = x - centerX
+                val dy = y - centerY
+                val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+                val radial = (1.0 - (dist / radius)).coerceIn(0.0, 1.0)
+                val density = (radial * normalized).coerceIn(0.0, 1.0)
+                val color = lerpColor(0xFF062437.toInt(), 0xFF22D3EE.toInt(), density)
+                frame[(y * 16) + x] = color
+            }
+        }
+
+        return frame
+    }
+
+    private fun lerpColor(from: Int, to: Int, t: Double): Int {
+        val clamped = t.coerceIn(0.0, 1.0)
+        val fa = (from ushr 24) and 0xFF
+        val fr = (from ushr 16) and 0xFF
+        val fg = (from ushr 8) and 0xFF
+        val fb = from and 0xFF
+
+        val ta = (to ushr 24) and 0xFF
+        val tr = (to ushr 16) and 0xFF
+        val tg = (to ushr 8) and 0xFF
+        val tb = to and 0xFF
+
+        val a = (fa + ((ta - fa) * clamped)).toInt().coerceIn(0, 255)
+        val r = (fr + ((tr - fr) * clamped)).toInt().coerceIn(0, 255)
+        val g = (fg + ((tg - fg) * clamped)).toInt().coerceIn(0, 255)
+        val b = (fb + ((tb - fb) * clamped)).toInt().coerceIn(0, 255)
+
+        return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     private fun enqueueEncodedFrame(frame: IntArray) {
@@ -567,5 +854,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             museGateway.disconnect()
         }
         divoomClient.close()
+    }
+
+    private companion object {
+        private val OSC_LINE_COLOR = 0xFF00E5FF.toInt()
+
+        private val HEART_MASK = listOf(
+            "0000000000000000",
+            "0000222000222000",
+            "0002111202111200",
+            "0021111111111120",
+            "0211111111111112",
+            "0211111111111112",
+            "0021111111111120",
+            "0002111111111200",
+            "0000211111112000",
+            "0000021111120000",
+            "0000002111200000",
+            "0000000212000000",
+            "0000000020000000",
+            "0000000000000000",
+            "0000000000000000",
+            "0000000000000000"
+        )
     }
 }
