@@ -108,7 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         viewModelScope.launch {
-            museGateway.connect(current.museDeviceAddress.takeIf { it.isNotBlank() })
+            museGateway.connect()
                 .onSuccess {
                     resetMuseWaveNormalizer()
                     _uiState.value = _uiState.value.copy(
@@ -122,24 +122,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     startMuseStreamCollection()
                 }
                 .onFailure { throwable ->
-                    _uiState.value = _uiState.value.copy(
-                        isMuseConnected = false,
-                        isUsingMuseStream = false,
-                        museConnectionStateText = "disconnected",
-                        museEegSampleCount = 0,
-                        museNotificationCount = 0L,
-                        museEegNotificationCount = 0L,
-                        museOtherNotificationCount = 0L,
-                        museLastPacketBytes = 0,
-                        museAlphaRatio = 0.0,
-                        museDominantRatio = 0.0,
-                        museTotalPower = 0.0,
-                        museActivity = 0.0,
-                        musePpgSampleCount = 0,
-                        museHeartBpm = 0.0,
-                        museOxygenPercent = 0.0,
-                        musePacketPreviewHex = "-",
-                        lastError = throwable.message ?: "Muse connection failed"
+                    _uiState.value = _uiState.value.withMuseDisconnected(
+                        error = throwable.message ?: "Muse connection failed"
                     )
                     startFakeStream()
                 }
@@ -153,33 +137,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             museGateway.disconnect()
-            _uiState.value = _uiState.value.copy(
-                isMuseConnected = false,
-                isUsingMuseStream = false,
-                museConnectionStateText = "disconnected",
-                museEegSampleCount = 0,
-                museNotificationCount = 0L,
-                museEegNotificationCount = 0L,
-                museOtherNotificationCount = 0L,
-                museLastPacketBytes = 0,
-                museAlphaRatio = 0.0,
-                museDominantRatio = 0.0,
-                museTotalPower = 0.0,
-                museActivity = 0.0,
-                musePpgSampleCount = 0,
-                museHeartBpm = 0.0,
-                museOxygenPercent = 0.0,
-                musePacketPreviewHex = "-"
-            )
+            _uiState.value = _uiState.value.withMuseDisconnected(error = null)
             startFakeStream()
         }
-    }
-
-    fun setMuseDeviceAddress(address: String) {
-        _uiState.value = _uiState.value.copy(
-            museDeviceAddress = address,
-            lastError = null
-        )
     }
 
     fun onBluetoothPermissionChanged(granted: Boolean) {
@@ -342,7 +302,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun reconnectMuseForProfileChange() {
-        val address = _uiState.value.museDeviceAddress.takeIf { it.isNotBlank() }
         museStreamJob?.cancel()
         museStreamJob = null
 
@@ -353,7 +312,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             museGateway.disconnect()
-            museGateway.connect(address)
+            museGateway.connect()
                 .onSuccess {
                     resetMuseWaveNormalizer()
                     _uiState.value = _uiState.value.copy(
@@ -367,24 +326,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     startMuseStreamCollection()
                 }
                 .onFailure { throwable ->
-                    _uiState.value = _uiState.value.copy(
-                        isMuseConnected = false,
-                        isUsingMuseStream = false,
-                        museConnectionStateText = "disconnected",
-                        museEegSampleCount = 0,
-                        museNotificationCount = 0L,
-                        museEegNotificationCount = 0L,
-                        museOtherNotificationCount = 0L,
-                        museLastPacketBytes = 0,
-                        museAlphaRatio = 0.0,
-                        museDominantRatio = 0.0,
-                        museTotalPower = 0.0,
-                        museActivity = 0.0,
-                        musePpgSampleCount = 0,
-                        museHeartBpm = 0.0,
-                        museOxygenPercent = 0.0,
-                        musePacketPreviewHex = "-",
-                        lastError = throwable.message ?: "Muse reconnect failed"
+                    _uiState.value = _uiState.value.withMuseDisconnected(
+                        error = throwable.message ?: "Muse reconnect failed"
                     )
                     startFakeStream()
                 }
@@ -434,24 +377,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         museStreamJob = viewModelScope.launch {
             museGateway.streamReadings(pollIntervalMs = 120L)
                 .catch { throwable ->
-                    _uiState.value = _uiState.value.copy(
-                        isMuseConnected = false,
-                        isUsingMuseStream = false,
-                        museConnectionStateText = "disconnected",
-                        museEegSampleCount = 0,
-                        museNotificationCount = 0L,
-                        museEegNotificationCount = 0L,
-                        museOtherNotificationCount = 0L,
-                        museLastPacketBytes = 0,
-                        museAlphaRatio = 0.0,
-                        museDominantRatio = 0.0,
-                        museTotalPower = 0.0,
-                        museActivity = 0.0,
-                        musePpgSampleCount = 0,
-                        museHeartBpm = 0.0,
-                        museOxygenPercent = 0.0,
-                        musePacketPreviewHex = "-",
-                        lastError = throwable.message ?: "Muse stream failed"
+                    _uiState.value = _uiState.value.withMuseDisconnected(
+                        error = throwable.message ?: "Muse stream failed"
                     )
                     startFakeStream()
                 }
@@ -552,7 +479,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun normalizeMuseWaveValue(rawValue: Double, band: BrainBand): Double {
         val clamped = rawValue.coerceIn(0.0, 1.0)
 
-        // Slowly track local min/max so even subtle EEG changes are visible on 16px height.
         museAdaptiveMin += (clamped - museAdaptiveMin) * 0.02
         museAdaptiveMax += (clamped - museAdaptiveMax) * 0.02
         museAdaptiveMin = min(museAdaptiveMin, clamped)
@@ -615,7 +541,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            DisplayMode.VRCHAT_LOGO -> logoGenerator.buildFrame(band)
+            DisplayMode.VRCHAT_LOGO -> logoGenerator.buildFrame(
+                normalizedValue = value,
+                waveColor = parameter.colorArgb
+            )
         }
         val packet = encoder.encodeFrame(frame)
         val packetSize = packet.size
@@ -708,6 +637,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val b = (fb + ((tb - fb) * clamped)).toInt().coerceIn(0, 255)
 
         return (a shl 24) or (r shl 16) or (g shl 8) or b
+    }
+
+    private fun MainUiState.withMuseDisconnected(error: String?): MainUiState {
+        return copy(
+            isMuseConnected = false,
+            isUsingMuseStream = false,
+            museConnectionStateText = "disconnected",
+            museEegSampleCount = 0,
+            museNotificationCount = 0L,
+            museEegNotificationCount = 0L,
+            museOtherNotificationCount = 0L,
+            museLastPacketBytes = 0,
+            museAlphaRatio = 0.0,
+            museDominantRatio = 0.0,
+            museTotalPower = 0.0,
+            museActivity = 0.0,
+            musePpgSampleCount = 0,
+            museHeartBpm = 0.0,
+            museOxygenPercent = 0.0,
+            musePacketPreviewHex = "-",
+            lastError = error
+        )
     }
 
     private fun enqueueEncodedFrame(frame: IntArray) {

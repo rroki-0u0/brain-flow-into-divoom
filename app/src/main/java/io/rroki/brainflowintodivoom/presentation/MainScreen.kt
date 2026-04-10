@@ -383,7 +383,7 @@ fun MainScreen(
                             Text("Oscilloscope")
                         }
                         Button(onClick = { onModeSelected(DisplayMode.VRCHAT_LOGO) }) {
-                            Text("Logo")
+                            Text("Bubble")
                         }
                     }
                 }

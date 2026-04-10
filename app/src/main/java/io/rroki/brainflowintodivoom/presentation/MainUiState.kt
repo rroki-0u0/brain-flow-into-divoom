@@ -29,7 +29,6 @@ data class MainUiState(
     val isUsingMuseStream: Boolean = false,
     val isMuseConnected: Boolean = false,
     val museConnectionStateText: String = "disconnected",
-    val museDeviceAddress: String = "",
     val museEegSampleCount: Int = 0,
     val museNotificationCount: Long = 0L,
     val museEegNotificationCount: Long = 0L,
