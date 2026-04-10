@@ -52,7 +52,8 @@ fun MainRoute(
         onConnectClick = mainViewModel::connectToDivoom,
         onDisconnectClick = mainViewModel::disconnectFromDivoom,
         onSendFrameClick = mainViewModel::sendCurrentFrame,
-        onAutoSendToggle = mainViewModel::toggleAutoSend
+        onAutoSendToggle = mainViewModel::toggleAutoSend,
+        onSendIntervalSelected = mainViewModel::setSendIntervalMs
     )
 }
 
@@ -65,7 +66,8 @@ fun MainScreen(
     onConnectClick: () -> Unit,
     onDisconnectClick: () -> Unit,
     onSendFrameClick: () -> Unit,
-    onAutoSendToggle: () -> Unit
+    onAutoSendToggle: () -> Unit,
+    onSendIntervalSelected: (Long) -> Unit
 ) {
     val scrollState = rememberScrollState()
 
@@ -93,8 +95,12 @@ fun MainScreen(
                 color = Color(0xFF9AA8C2)
             )
             Text(
-                text = "divoom=${state.connectionStateText}  autoSend=${state.autoSendEnabled}",
+                text = "divoom=${state.connectionStateText}  autoSend=${state.autoSendEnabled}  interval=${state.sendIntervalMs}ms",
                 color = if (state.isDivoomConnected) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
+            )
+            Text(
+                text = "reconnectAttempt=${state.reconnectAttempt}",
+                color = Color(0xFF9AA8C2)
             )
             Text(
                 text = "selected=${state.divoomDeviceName}",
@@ -175,6 +181,33 @@ fun MainScreen(
                 }
             }
 
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { onSendIntervalSelected(100L) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.sendIntervalMs == 100L) Color(0xFF14532D) else Color(0xFF1F2937)
+                    )
+                ) {
+                    Text("100ms")
+                }
+                Button(
+                    onClick = { onSendIntervalSelected(150L) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.sendIntervalMs == 150L) Color(0xFF14532D) else Color(0xFF1F2937)
+                    )
+                ) {
+                    Text("150ms")
+                }
+                Button(
+                    onClick = { onSendIntervalSelected(200L) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.sendIntervalMs == 200L) Color(0xFF14532D) else Color(0xFF1F2937)
+                    )
+                ) {
+                    Text("200ms")
+                }
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -188,7 +221,7 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = if (state.hasBluetoothPermissions) {
-                    "MVP status: simulated EEG stream running (120ms)."
+                    "MVP status: simulated EEG stream running (120ms), Divoom send interval is adjustable."
                 } else {
                     "MVP status: grant Bluetooth permissions to connect Divoom."
                 },

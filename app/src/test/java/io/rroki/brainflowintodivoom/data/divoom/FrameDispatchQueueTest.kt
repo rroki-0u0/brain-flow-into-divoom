@@ -6,6 +6,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,5 +49,18 @@ class FrameDispatchQueueTest {
 
         queue.stop()
         scope.cancel()
+    }
+
+    @Test
+    fun `set interval updates and clamps value`() {
+        val queue = FrameDispatchQueue(minIntervalMs = 180L) { }
+
+        assertEquals(180L, queue.intervalMs.value)
+
+        queue.setIntervalMs(100L)
+        assertEquals(100L, queue.intervalMs.value)
+
+        queue.setIntervalMs(-50L)
+        assertEquals(0L, queue.intervalMs.value)
     }
 }

@@ -21,7 +21,28 @@ import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.sin
 
+private data class ReconnectPolicy(
+    val maxAttempts: Int,
+    val initialDelayMs: Long,
+    val maxDelayMs: Long,
+    val multiplier: Double
+) {
+    fun delayForAttempt(attempt: Int): Long {
+        val exponent = (attempt - 1).coerceAtLeast(0)
+        val scaled = initialDelayMs * Math.pow(multiplier, exponent.toDouble())
+        return scaled.toLong().coerceAtMost(maxDelayMs)
+    }
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val sendIntervalPresets = listOf(100L, 150L, 200L)
+    private val reconnectPolicy = ReconnectPolicy(
+        maxAttempts = 3,
+        initialDelayMs = 250L,
+        maxDelayMs = 2_000L,
+        multiplier = 2.0
+    )
+
     private val oscilloscopeGenerator = OscilloscopeFrameGenerator()
     private val logoGenerator = VrchatLogoFrameGenerator()
     private val encoder = DivoomPacketEncoder()
@@ -129,6 +150,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(autoSendEnabled = !_uiState.value.autoSendEnabled)
     }
 
+    fun setSendIntervalMs(intervalMs: Long) {
+        val selected = sendIntervalPresets.minByOrNull { candidate ->
+            kotlin.math.abs(candidate - intervalMs)
+        } ?: 150L
+
+        frameQueue.setIntervalMs(selected)
+        _uiState.value = _uiState.value.copy(
+            sendIntervalMs = selected,
+            lastError = null
+        )
+    }
+
     fun sendCurrentFrame() {
         val currentState = _uiState.value
         if (!currentState.isDivoomConnected) {
@@ -206,40 +239,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val recoverable = firstError is IOException && isRecoverableConnectionDrop(firstError)
         if (!recoverable) {
-            updateConnectionState(
-                state = DivoomConnectionState.DISCONNECTED,
-                error = firstError.message ?: "Failed to send frame"
-            )
+            handleSendDisconnect(firstError.message ?: "Failed to send frame")
             return
         }
 
+        for (attempt in 1..reconnectPolicy.maxAttempts) {
+            if (attempt > 1) {
+                delay(reconnectPolicy.delayForAttempt(attempt))
+            }
+
+            updateConnectionState(
+                state = DivoomConnectionState.CONNECTING,
+                error = "Connection dropped. Reconnecting ($attempt/${reconnectPolicy.maxAttempts})...",
+                reconnectAttempt = attempt
+            )
+
+            val stateSnapshot = _uiState.value
+            val reconnectResult = divoomClient.connectBySelection(
+                deviceName = stateSnapshot.divoomDeviceName,
+                deviceAddress = stateSnapshot.selectedDivoomDeviceAddress
+            )
+            if (reconnectResult.isFailure) {
+                continue
+            }
+
+            val resendError = divoomClient.send(packet).exceptionOrNull()
+            if (resendError == null) {
+                updateConnectionState(
+                    state = DivoomConnectionState.CONNECTED,
+                    reconnectAttempt = 0
+                )
+                return
+            }
+
+            if (resendError !is IOException || !isRecoverableConnectionDrop(resendError)) {
+                handleSendDisconnect(resendError.message ?: "Failed to send frame after reconnect")
+                return
+            }
+        }
+
+        handleSendDisconnect("Reconnect failed after ${reconnectPolicy.maxAttempts} attempts")
+    }
+
+    private fun handleSendDisconnect(error: String) {
         updateConnectionState(
-            state = DivoomConnectionState.CONNECTING,
-            error = "Connection dropped. Reconnecting..."
+            state = DivoomConnectionState.DISCONNECTED,
+            error = error,
+            reconnectAttempt = 0
         )
-
-        val stateSnapshot = _uiState.value
-        val reconnectResult = divoomClient.connectBySelection(
-            deviceName = stateSnapshot.divoomDeviceName,
-            deviceAddress = stateSnapshot.selectedDivoomDeviceAddress
-        )
-
-        if (reconnectResult.isFailure) {
-            updateConnectionState(
-                state = DivoomConnectionState.DISCONNECTED,
-                error = reconnectResult.exceptionOrNull()?.message ?: "Reconnect failed"
-            )
-            return
-        }
-
-        updateConnectionState(DivoomConnectionState.CONNECTED)
-
-        divoomClient.send(packet).onFailure { retryError ->
-            updateConnectionState(
-                state = DivoomConnectionState.DISCONNECTED,
-                error = retryError.message ?: "Failed to send frame after reconnect"
-            )
-        }
+        _uiState.value = _uiState.value.copy(autoSendEnabled = false)
     }
 
     private fun isRecoverableConnectionDrop(throwable: IOException): Boolean {
@@ -284,7 +332,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun updateConnectionState(state: DivoomConnectionState, error: String? = null) {
+    private fun updateConnectionState(
+        state: DivoomConnectionState,
+        error: String? = null,
+        reconnectAttempt: Int? = null
+    ) {
         connectionState = state
         val message = when (state) {
             DivoomConnectionState.DISCONNECTED -> "disconnected"
@@ -292,9 +344,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             DivoomConnectionState.CONNECTED -> "connected"
         }
 
+        val reconnectState = reconnectAttempt ?: when (state) {
+            DivoomConnectionState.CONNECTING -> _uiState.value.reconnectAttempt
+            DivoomConnectionState.DISCONNECTED,
+            DivoomConnectionState.CONNECTED -> 0
+        }
+
         _uiState.value = _uiState.value.copy(
             isDivoomConnected = state == DivoomConnectionState.CONNECTED,
             connectionStateText = message,
+            reconnectAttempt = reconnectState,
             lastError = error
         )
     }

@@ -18,6 +18,8 @@ data class MainUiState(
     val isDivoomConnected: Boolean = false,
     val hasBluetoothPermissions: Boolean = false,
     val autoSendEnabled: Boolean = false,
+    val sendIntervalMs: Long = 180L,
+    val reconnectAttempt: Int = 0,
     val divoomDeviceName: String = "Pixoo-SlingBag",
     val selectedDivoomDeviceAddress: String? = null,
     val availableDivoomDevices: List<DivoomDeviceOption> = emptyList(),

@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -18,6 +19,8 @@ class FrameDispatchQueue(
     private val queue = Channel<ByteArray>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running
+    private val _intervalMs = MutableStateFlow(minIntervalMs)
+    val intervalMs: StateFlow<Long> = _intervalMs.asStateFlow()
 
     private var workerJob: Job? = null
 
@@ -29,13 +32,17 @@ class FrameDispatchQueue(
             while (isActive) {
                 val frame = queue.receive()
                 sender(frame)
-                delay(minIntervalMs)
+                delay(_intervalMs.value)
             }
         }
     }
 
     suspend fun enqueue(frame: ByteArray) {
         queue.send(frame)
+    }
+
+    fun setIntervalMs(value: Long) {
+        _intervalMs.value = value.coerceAtLeast(0L)
     }
 
     fun stop() {
