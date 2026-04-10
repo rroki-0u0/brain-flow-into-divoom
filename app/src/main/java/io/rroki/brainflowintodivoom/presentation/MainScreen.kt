@@ -12,7 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,6 +47,8 @@ fun MainRoute(
     MainScreen(
         state = state,
         onModeSelected = mainViewModel::setMode,
+        onScanDevicesClick = mainViewModel::scanDivoomDevices,
+        onSelectDivoomDevice = mainViewModel::selectDivoomDevice,
         onConnectClick = mainViewModel::connectToDivoom,
         onDisconnectClick = mainViewModel::disconnectFromDivoom,
         onSendFrameClick = mainViewModel::sendCurrentFrame,
@@ -55,15 +60,20 @@ fun MainRoute(
 fun MainScreen(
     state: MainUiState,
     onModeSelected: (DisplayMode) -> Unit,
+    onScanDevicesClick: () -> Unit,
+    onSelectDivoomDevice: (String) -> Unit,
     onConnectClick: () -> Unit,
     onDisconnectClick: () -> Unit,
     onSendFrameClick: () -> Unit,
     onAutoSendToggle: () -> Unit
 ) {
+    val scrollState = rememberScrollState()
+
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF02030A)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(scrollState)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -86,9 +96,47 @@ fun MainScreen(
                 text = "divoom=${state.connectionStateText}  autoSend=${state.autoSendEnabled}",
                 color = if (state.isDivoomConnected) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
             )
+            Text(
+                text = "selected=${state.divoomDeviceName}",
+                color = Color(0xFF9AA8C2)
+            )
 
             state.lastError?.let { error ->
                 Text(text = "error=$error", color = Color(0xFFFF8A80))
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = onScanDevicesClick,
+                    enabled = state.hasBluetoothPermissions && !state.isScanningDivoomDevices
+                ) {
+                    Text(if (state.isScanningDivoomDevices) "Scanning..." else "Scan Devices")
+                }
+            }
+
+            if (state.availableDivoomDevices.isEmpty()) {
+                Text(
+                    text = "No discovered devices yet",
+                    color = Color(0xFF9AA8C2)
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.availableDivoomDevices.forEach { device ->
+                        val selected = device.address == state.selectedDivoomDeviceAddress
+                        Button(
+                            onClick = { onSelectDivoomDevice(device.address) },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !state.isScanningDivoomDevices,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selected) Color(0xFF14532D) else Color(0xFF1F2937)
+                            )
+                        ) {
+                            val source = if (device.isBonded) "paired" else "discovered"
+                            val suffix = device.address.takeLast(5)
+                            Text("${device.name} [$source • ..$suffix]")
+                        }
+                    }
+                }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

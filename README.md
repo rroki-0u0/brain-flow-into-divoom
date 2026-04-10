@@ -10,7 +10,7 @@ Divoom x Muse S の脳波連動 Android アプリ実装リポジトリです。
 - モードA（オシロ）とモードB（VRChatロゴ）のフレーム生成ロジックを実装
 - Divoom プロトコルの基本エンコーダを実装
 - 送信レート制御用キュー（最新フレーム優先）を実装
-- Bluetooth Classic SPP クライアントを実装（ペアリング済み Pixoo Backpack 接続）
+- Bluetooth Classic SPP クライアントを実装（ペアリング済み優先 + アプリ内探索で未ペア端末も接続）
 - Compose 上で 16x16 プレビュー表示を実装
 - UIから接続/切断/手動送信/自動送信の操作を実装
 - ロジックとエンコーダの単体テストを追加
@@ -48,7 +48,7 @@ app/
 - Muse S 連携（BrainFlow）は現時点ではインターフェースのみです。実機接続は次フェーズで実装します。
 - Divoom CRC 計算は現時点で検証用の暫定実装です。実機テストで最終調整します。
 - `BLUETOOTH_CONNECT` / `BLUETOOTH_SCAN`（Android 12+）と旧API向け権限分岐を実装済みです。
-- Divoom接続は「ペアリング済みデバイス名 `Pixoo Backpack`」を前提にしています。
+- Divoom接続は、ペアリング済み端末を優先しつつ、未ペア端末もBluetooth探索で検出して接続します。
 
 ## 次フェーズ
 

@@ -3,6 +3,12 @@ package io.rroki.brainflowintodivoom.presentation
 import io.rroki.brainflowintodivoom.domain.model.BrainBand
 import io.rroki.brainflowintodivoom.domain.model.DisplayMode
 
+data class DivoomDeviceOption(
+    val name: String,
+    val address: String,
+    val isBonded: Boolean
+)
+
 data class MainUiState(
     val mode: DisplayMode = DisplayMode.OSCILLOSCOPE,
     val dominantBand: BrainBand = BrainBand.ALPHA,
@@ -12,7 +18,10 @@ data class MainUiState(
     val isDivoomConnected: Boolean = false,
     val hasBluetoothPermissions: Boolean = false,
     val autoSendEnabled: Boolean = false,
-    val divoomDeviceName: String = "Pixoo Backpack",
+    val divoomDeviceName: String = "Pixoo-SlingBag",
+    val selectedDivoomDeviceAddress: String? = null,
+    val availableDivoomDevices: List<DivoomDeviceOption> = emptyList(),
+    val isScanningDivoomDevices: Boolean = false,
     val connectionStateText: String = "disconnected",
     val lastError: String? = null
 )

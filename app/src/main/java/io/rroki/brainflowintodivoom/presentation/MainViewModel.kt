@@ -5,12 +5,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.rroki.brainflowintodivoom.data.divoom.DivoomBluetoothClient
 import io.rroki.brainflowintodivoom.data.divoom.DivoomConnectionState
+import io.rroki.brainflowintodivoom.data.divoom.DivoomDiscoveredDevice
 import io.rroki.brainflowintodivoom.data.divoom.DivoomPacketEncoder
 import io.rroki.brainflowintodivoom.data.divoom.FrameDispatchQueue
 import io.rroki.brainflowintodivoom.domain.model.BrainBand
 import io.rroki.brainflowintodivoom.domain.model.DisplayMode
 import io.rroki.brainflowintodivoom.domain.processing.OscilloscopeFrameGenerator
 import io.rroki.brainflowintodivoom.domain.processing.VrchatLogoFrameGenerator
+import java.io.IOException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,13 +27,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val encoder = DivoomPacketEncoder()
     private val divoomClient = DivoomBluetoothClient(application.applicationContext)
     private var connectionState = DivoomConnectionState.DISCONNECTED
-    private val frameQueue = FrameDispatchQueue(minIntervalMs = 120L) { packet ->
-        divoomClient.send(packet).onFailure { throwable ->
-            updateConnectionState(
-                state = DivoomConnectionState.DISCONNECTED,
-                error = throwable.message ?: "Failed to send frame"
-            )
-        }
+    private val frameQueue = FrameDispatchQueue(minIntervalMs = 180L) { packet ->
+        sendPacketWithRecovery(packet)
     }
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -46,6 +43,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(
             hasBluetoothPermissions = granted,
             lastError = if (granted) null else "Bluetooth permissions are required"
+        )
+
+        if (granted && _uiState.value.availableDivoomDevices.isEmpty()) {
+            scanDivoomDevices()
+        }
+    }
+
+    fun scanDivoomDevices() {
+        val currentState = _uiState.value
+        if (!currentState.hasBluetoothPermissions) {
+            _uiState.value = currentState.copy(lastError = "Grant Bluetooth permissions first")
+            return
+        }
+        if (currentState.isScanningDivoomDevices) {
+            return
+        }
+
+        _uiState.value = currentState.copy(
+            isScanningDivoomDevices = true,
+            lastError = null
+        )
+
+        viewModelScope.launch {
+            divoomClient.discoverDivoomDevices()
+                .onSuccess { devices ->
+                    updateDiscoveredDevices(devices)
+                }
+                .onFailure { throwable ->
+                    _uiState.value = _uiState.value.copy(
+                        isScanningDivoomDevices = false,
+                        lastError = throwable.message ?: "Device scan failed"
+                    )
+                }
+        }
+    }
+
+    fun selectDivoomDevice(address: String) {
+        val selected = _uiState.value.availableDivoomDevices.firstOrNull { it.address == address } ?: return
+        _uiState.value = _uiState.value.copy(
+            divoomDeviceName = selected.name,
+            selectedDivoomDeviceAddress = selected.address,
+            lastError = null
         )
     }
 
@@ -62,7 +101,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateConnectionState(DivoomConnectionState.CONNECTING)
 
         viewModelScope.launch {
-            divoomClient.connectByName(_uiState.value.divoomDeviceName)
+            val currentState = _uiState.value
+            divoomClient.connectBySelection(
+                deviceName = currentState.divoomDeviceName,
+                deviceAddress = currentState.selectedDivoomDeviceAddress
+            )
                 .onSuccess {
                     updateConnectionState(DivoomConnectionState.CONNECTED)
                 }
@@ -158,6 +201,89 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun sendPacketWithRecovery(packet: ByteArray) {
+        val firstError = divoomClient.send(packet).exceptionOrNull() ?: return
+
+        val recoverable = firstError is IOException && isRecoverableConnectionDrop(firstError)
+        if (!recoverable) {
+            updateConnectionState(
+                state = DivoomConnectionState.DISCONNECTED,
+                error = firstError.message ?: "Failed to send frame"
+            )
+            return
+        }
+
+        updateConnectionState(
+            state = DivoomConnectionState.CONNECTING,
+            error = "Connection dropped. Reconnecting..."
+        )
+
+        val stateSnapshot = _uiState.value
+        val reconnectResult = divoomClient.connectBySelection(
+            deviceName = stateSnapshot.divoomDeviceName,
+            deviceAddress = stateSnapshot.selectedDivoomDeviceAddress
+        )
+
+        if (reconnectResult.isFailure) {
+            updateConnectionState(
+                state = DivoomConnectionState.DISCONNECTED,
+                error = reconnectResult.exceptionOrNull()?.message ?: "Reconnect failed"
+            )
+            return
+        }
+
+        updateConnectionState(DivoomConnectionState.CONNECTED)
+
+        divoomClient.send(packet).onFailure { retryError ->
+            updateConnectionState(
+                state = DivoomConnectionState.DISCONNECTED,
+                error = retryError.message ?: "Failed to send frame after reconnect"
+            )
+        }
+    }
+
+    private fun isRecoverableConnectionDrop(throwable: IOException): Boolean {
+        val message = throwable.message.orEmpty()
+        return message.contains("broken pipe", ignoreCase = true) ||
+            message.contains("socket closed", ignoreCase = true) ||
+            message.contains("connection abort", ignoreCase = true) ||
+            message.contains("connection reset", ignoreCase = true)
+    }
+
+    private fun updateDiscoveredDevices(devices: List<DivoomDiscoveredDevice>) {
+        val options = devices.map {
+            DivoomDeviceOption(
+                name = it.name,
+                address = it.address,
+                isBonded = it.isBonded
+            )
+        }
+
+        val currentState = _uiState.value
+        val selectedAddress = when {
+            currentState.selectedDivoomDeviceAddress != null &&
+                options.any { it.address == currentState.selectedDivoomDeviceAddress } -> {
+                currentState.selectedDivoomDeviceAddress
+            }
+
+            options.isNotEmpty() -> options.first().address
+            else -> null
+        }
+        val selectedName = options.firstOrNull { it.address == selectedAddress }?.name ?: currentState.divoomDeviceName
+
+        _uiState.value = currentState.copy(
+            availableDivoomDevices = options,
+            selectedDivoomDeviceAddress = selectedAddress,
+            divoomDeviceName = selectedName,
+            isScanningDivoomDevices = false,
+            lastError = if (options.isEmpty()) {
+                "No Divoom devices found. Keep the device discoverable and try scan again"
+            } else {
+                null
+            }
+        )
+    }
+
     private fun updateConnectionState(state: DivoomConnectionState, error: String? = null) {
         connectionState = state
         val message = when (state) {
@@ -171,6 +297,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             connectionStateText = message,
             lastError = error
         )
+    }
+
+    fun setDivoomDeviceName(name: String) {
+        _uiState.value = _uiState.value.copy(divoomDeviceName = name, lastError = null)
     }
 
     override fun onCleared() {
