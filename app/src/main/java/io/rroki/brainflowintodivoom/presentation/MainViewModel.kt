@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.PI
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 
 private data class ReconnectPolicy(
@@ -54,6 +56,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val divoomClient = DivoomBluetoothClient(application.applicationContext)
     private val museGateway: MuseStreamGateway = OpenMuseAthenaGateway(application.applicationContext)
     private var connectionState = DivoomConnectionState.DISCONNECTED
+    private var museAdaptiveMin = 0.35
+    private var museAdaptiveMax = 0.65
+    private var museRenderedValue = 0.5
     private var fakeStreamJob: Job? = null
     private var museStreamJob: Job? = null
     private val frameQueue = FrameDispatchQueue(minIntervalMs = 180L) { packet ->
@@ -88,10 +93,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             museGateway.connect(current.museDeviceAddress.takeIf { it.isNotBlank() })
                 .onSuccess {
+                    resetMuseWaveNormalizer()
                     _uiState.value = _uiState.value.copy(
                         isMuseConnected = true,
                         isUsingMuseStream = true,
                         museConnectionStateText = "connected",
+                        autoSendEnabled = true,
                         lastError = null
                     )
                     stopFakeStream()
@@ -102,6 +109,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isMuseConnected = false,
                         isUsingMuseStream = false,
                         museConnectionStateText = "disconnected",
+                        museEegSampleCount = 0,
+                        museNotificationCount = 0L,
+                        museEegNotificationCount = 0L,
+                        museOtherNotificationCount = 0L,
+                        museLastPacketBytes = 0,
+                        museAlphaRatio = 0.0,
+                        museDominantRatio = 0.0,
+                        museTotalPower = 0.0,
+                        museActivity = 0.0,
+                        musePacketPreviewHex = "-",
                         lastError = throwable.message ?: "Muse connection failed"
                     )
                     startFakeStream()
@@ -112,13 +129,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnectFromMuse() {
         museStreamJob?.cancel()
         museStreamJob = null
+        resetMuseWaveNormalizer()
 
         viewModelScope.launch {
             museGateway.disconnect()
             _uiState.value = _uiState.value.copy(
                 isMuseConnected = false,
                 isUsingMuseStream = false,
-                museConnectionStateText = "disconnected"
+                museConnectionStateText = "disconnected",
+                museEegSampleCount = 0,
+                museNotificationCount = 0L,
+                museEegNotificationCount = 0L,
+                museOtherNotificationCount = 0L,
+                museLastPacketBytes = 0,
+                museAlphaRatio = 0.0,
+                museDominantRatio = 0.0,
+                museTotalPower = 0.0,
+                museActivity = 0.0,
+                musePacketPreviewHex = "-"
             )
             startFakeStream()
         }
@@ -286,6 +314,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startMuseStreamCollection() {
         museStreamJob?.cancel()
+        resetMuseWaveNormalizer()
         museStreamJob = viewModelScope.launch {
             museGateway.streamReadings(pollIntervalMs = 120L)
                 .catch { throwable ->
@@ -293,18 +322,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isMuseConnected = false,
                         isUsingMuseStream = false,
                         museConnectionStateText = "disconnected",
+                        museEegSampleCount = 0,
+                        museNotificationCount = 0L,
+                        museEegNotificationCount = 0L,
+                        museOtherNotificationCount = 0L,
+                        museLastPacketBytes = 0,
+                        museAlphaRatio = 0.0,
+                        museDominantRatio = 0.0,
+                        museTotalPower = 0.0,
+                        museActivity = 0.0,
+                        musePacketPreviewHex = "-",
                         lastError = throwable.message ?: "Muse stream failed"
                     )
                     startFakeStream()
                 }
                 .collect { reading ->
+                    _uiState.value = _uiState.value.copy(
+                        museEegSampleCount = reading.eegSampleCount,
+                        museNotificationCount = reading.notificationCount,
+                        museEegNotificationCount = reading.eegNotificationCount,
+                        museOtherNotificationCount = reading.otherNotificationCount,
+                        museLastPacketBytes = reading.latestPacketBytes,
+                        museAlphaRatio = reading.alphaRatio,
+                        museDominantRatio = reading.dominantRatio,
+                        museTotalPower = reading.totalPower,
+                        museActivity = reading.activity,
+                        musePacketPreviewHex = reading.packetPreviewHex
+                    )
+
+                    val normalizedForWave = normalizeMuseWaveValue(
+                        rawValue = reading.normalizedAlpha,
+                        band = reading.dominantBand
+                    )
                     updateState(
                         mode = _uiState.value.mode,
-                        value = reading.normalizedAlpha,
+                        value = normalizedForWave,
                         band = reading.dominantBand
                     )
                 }
         }
+    }
+
+    private fun normalizeMuseWaveValue(rawValue: Double, band: BrainBand): Double {
+        val clamped = rawValue.coerceIn(0.0, 1.0)
+
+        // Slowly track local min/max so even subtle EEG changes are visible on 16px height.
+        museAdaptiveMin += (clamped - museAdaptiveMin) * 0.02
+        museAdaptiveMax += (clamped - museAdaptiveMax) * 0.02
+        museAdaptiveMin = min(museAdaptiveMin, clamped)
+        museAdaptiveMax = max(museAdaptiveMax, clamped)
+
+        if (museAdaptiveMax - museAdaptiveMin < 0.05) {
+            val mid = (museAdaptiveMax + museAdaptiveMin) / 2.0
+            museAdaptiveMin = (mid - 0.025).coerceAtLeast(0.0)
+            museAdaptiveMax = (mid + 0.025).coerceAtMost(1.0)
+        }
+
+        val range = (museAdaptiveMax - museAdaptiveMin).coerceAtLeast(0.05)
+        var stretched = ((clamped - museAdaptiveMin) / range).coerceIn(0.0, 1.0)
+
+        val bandBias = when (band) {
+            BrainBand.DELTA -> -0.10
+            BrainBand.THETA -> -0.05
+            BrainBand.ALPHA -> 0.0
+            BrainBand.BETA -> 0.08
+            BrainBand.GAMMA -> 0.04
+        }
+        stretched = (stretched + bandBias).coerceIn(0.0, 1.0)
+
+        museRenderedValue = (museRenderedValue * 0.65) + (stretched * 0.35)
+        return museRenderedValue
+    }
+
+    private fun resetMuseWaveNormalizer() {
+        museAdaptiveMin = 0.35
+        museAdaptiveMax = 0.65
+        museRenderedValue = 0.5
     }
 
     private fun updateState(mode: DisplayMode, value: Double, band: BrainBand) {

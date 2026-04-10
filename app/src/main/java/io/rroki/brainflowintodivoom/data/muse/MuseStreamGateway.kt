@@ -6,7 +6,17 @@ import kotlinx.coroutines.flow.emptyFlow
 
 data class MuseReading(
     val normalizedAlpha: Double,
-    val dominantBand: BrainBand
+    val dominantBand: BrainBand,
+    val eegSampleCount: Int = 0,
+    val notificationCount: Long = 0L,
+    val eegNotificationCount: Long = 0L,
+    val otherNotificationCount: Long = 0L,
+    val latestPacketBytes: Int = 0,
+    val alphaRatio: Double = 0.0,
+    val dominantRatio: Double = 0.0,
+    val totalPower: Double = 0.0,
+    val activity: Double = 0.0,
+    val packetPreviewHex: String = "-"
 )
 
 interface MuseStreamGateway {

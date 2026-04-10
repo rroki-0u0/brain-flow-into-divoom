@@ -140,13 +140,21 @@ class BrainFlowMuseAthenaGateway : MuseStreamGateway {
         val raw = invokeOnTarget(shim, listOf("get_current_board_data", "getCurrentBoardData"), 256)
         val matrix = toDoubleMatrix(raw)
         if (matrix.isEmpty()) {
-            return MuseReading(normalizedAlpha = 0.0, dominantBand = BrainBand.ALPHA)
+            return MuseReading(
+                normalizedAlpha = 0.0,
+                dominantBand = BrainBand.ALPHA,
+                eegSampleCount = 0
+            )
         }
 
         val selectedChannel = eegChannels.firstOrNull { it in matrix.indices } ?: 0
         val signal = matrix[selectedChannel]
         if (signal.size < 64) {
-            return MuseReading(normalizedAlpha = 0.0, dominantBand = BrainBand.ALPHA)
+            return MuseReading(
+                normalizedAlpha = 0.0,
+                dominantBand = BrainBand.ALPHA,
+                eegSampleCount = signal.size
+            )
         }
 
         val centered = centerSignal(signal)
@@ -159,10 +167,19 @@ class BrainFlowMuseAthenaGateway : MuseStreamGateway {
         val normalizedAlpha = (alpha / baseline).coerceIn(0.0, 1.0)
 
         val dominantBand = bandPowers.maxByOrNull { it.value }?.key ?: BrainBand.ALPHA
+        val totalPower = bandPowers.values.sum()
+        val dominantPower = bandPowers[dominantBand] ?: 0.0
+        val alphaRatio = if (totalPower > 1e-9) (alpha / totalPower).coerceIn(0.0, 1.0) else 0.0
+        val dominantRatio = if (totalPower > 1e-9) (dominantPower / totalPower).coerceIn(0.0, 1.0) else 0.0
 
         return MuseReading(
             normalizedAlpha = normalizedAlpha,
-            dominantBand = dominantBand
+            dominantBand = dominantBand,
+            eegSampleCount = signal.size,
+            alphaRatio = alphaRatio,
+            dominantRatio = dominantRatio,
+            totalPower = totalPower,
+            activity = centered.map { sample -> sample * sample }.average()
         )
     }
 

@@ -106,6 +106,22 @@ fun MainScreen(
                 color = Color(0xFF9AA8C2)
             )
             Text(
+                text = "museRaw: notif=${state.museNotificationCount} (eeg=${state.museEegNotificationCount}/other=${state.museOtherNotificationCount})  lastPkt=${state.museLastPacketBytes} bytes  eegSamples=${state.museEegSampleCount}",
+                color = Color(0xFF9AA8C2)
+            )
+            Text(
+                text = "museBands: alphaRatio=${"%.4f".format(state.museAlphaRatio)}  dominantRatio=${"%.4f".format(state.museDominantRatio)}  totalPower=${"%.6f".format(state.museTotalPower)}",
+                color = Color(0xFF9AA8C2)
+            )
+            Text(
+                text = "museActivity=${"%.4f".format(state.museActivity)}",
+                color = Color(0xFF9AA8C2)
+            )
+            Text(
+                text = "musePacketHead=${state.musePacketPreviewHex}",
+                color = Color(0xFF9AA8C2)
+            )
+            Text(
                 text = "divoom=${state.connectionStateText}  autoSend=${state.autoSendEnabled}  interval=${state.sendIntervalMs}ms",
                 color = if (state.isDivoomConnected) Color(0xFF6EE7B7) else Color(0xFFFCA5A5)
             )

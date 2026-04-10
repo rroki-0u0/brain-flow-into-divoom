@@ -19,12 +19,14 @@ import java.io.Closeable
 import java.util.ArrayDeque
 import java.util.UUID
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -50,8 +52,19 @@ class OpenMuseAthenaGateway(
     private var otherCharacteristic: BluetoothGattCharacteristic? = null
 
     private val eegSignal = ArrayDeque<Double>(MAX_SIGNAL_BUFFER)
+    private val eegPendingBytes = ArrayList<Byte>()
+    private val otherPendingBytes = ArrayList<Byte>()
     private var latestDominantBand: BrainBand = BrainBand.ALPHA
     private var latestNormalizedAlpha: Double = 0.0
+    private var latestActivity: Double = 0.0
+    private var latestAlphaRatio: Double = 0.0
+    private var latestDominantRatio: Double = 0.0
+    private var latestTotalPower: Double = 0.0
+    private var notificationCount: Long = 0L
+    private var eegNotificationCount: Long = 0L
+    private var otherNotificationCount: Long = 0L
+    private var lastNotificationBytes: Int = 0
+    private var lastPacketPreviewHex: String = "-"
 
     override fun isRuntimeAvailable(): Boolean {
         val adapter = bluetoothManager?.adapter
@@ -93,8 +106,19 @@ class OpenMuseAthenaGateway(
                 eegCharacteristic = eeg
                 otherCharacteristic = other
                 eegSignal.clear()
+                eegPendingBytes.clear()
+                otherPendingBytes.clear()
                 latestDominantBand = BrainBand.ALPHA
                 latestNormalizedAlpha = 0.0
+                latestActivity = 0.0
+                latestAlphaRatio = 0.0
+                latestDominantRatio = 0.0
+                latestTotalPower = 0.0
+                notificationCount = 0L
+                eegNotificationCount = 0L
+                otherNotificationCount = 0L
+                lastNotificationBytes = 0
+                lastPacketPreviewHex = "-"
             }
 
             enableNotification(connectedGatt, eeg)
@@ -133,10 +157,36 @@ class OpenMuseAthenaGateway(
         while (currentCoroutineContext().isActive) {
             val reading = synchronized(lock) {
                 if (eegSignal.isEmpty()) {
-                    MuseReading(0.0, latestDominantBand)
+                    MuseReading(
+                        normalizedAlpha = 0.0,
+                        dominantBand = latestDominantBand,
+                        eegSampleCount = 0,
+                        notificationCount = notificationCount,
+                        eegNotificationCount = eegNotificationCount,
+                        otherNotificationCount = otherNotificationCount,
+                        latestPacketBytes = lastNotificationBytes,
+                        alphaRatio = latestAlphaRatio,
+                        dominantRatio = latestDominantRatio,
+                        totalPower = latestTotalPower,
+                        activity = latestActivity,
+                        packetPreviewHex = lastPacketPreviewHex
+                    )
                 } else {
                     recomputeBandsLocked()
-                    MuseReading(latestNormalizedAlpha, latestDominantBand)
+                    MuseReading(
+                        normalizedAlpha = latestNormalizedAlpha,
+                        dominantBand = latestDominantBand,
+                        eegSampleCount = eegSignal.size,
+                        notificationCount = notificationCount,
+                        eegNotificationCount = eegNotificationCount,
+                        otherNotificationCount = otherNotificationCount,
+                        latestPacketBytes = lastNotificationBytes,
+                        alphaRatio = latestAlphaRatio,
+                        dominantRatio = latestDominantRatio,
+                        totalPower = latestTotalPower,
+                        activity = latestActivity,
+                        packetPreviewHex = lastPacketPreviewHex
+                    )
                 }
             }
             emit(reading)
@@ -368,33 +418,184 @@ class OpenMuseAthenaGateway(
             return
         }
 
-        val subpackets = parseSubpackets(value)
-        if (subpackets.isEmpty()) {
+        synchronized(lock) {
+            notificationCount += 1
+            if (uuid == UUID_EEG) {
+                eegNotificationCount += 1
+            } else if (uuid == UUID_OTHER) {
+                otherNotificationCount += 1
+            }
+            lastNotificationBytes = value.size
+            lastPacketPreviewHex = value
+                .take(12)
+                .joinToString(separator = " ") { byte -> "%02X".format(byte.toInt() and 0xFF) }
+                .ifBlank { "-" }
+        }
+
+        val completePacketPayloads = synchronized(lock) {
+            val pending = if (uuid == UUID_EEG) eegPendingBytes else otherPendingBytes
+            pending.ensureCapacity(pending.size + value.size)
+            value.forEach { pending.add(it) }
+            drainCompletePacketsLocked(pending)
+        }
+
+        if (completePacketPayloads.isEmpty()) {
+            return
+        }
+        val combined = completePacketPayloads.fold(ByteArray(0)) { acc, packet ->
+            if (acc.isEmpty()) {
+                packet
+            } else {
+                acc + packet
+            }
+        }
+
+        val subpackets = parseSubpackets(combined)
+        var appendedSamplesFromSubpackets = 0
+        if (subpackets.isNotEmpty()) {
+            synchronized(lock) {
+                subpackets.forEach { subpacket ->
+                    if (subpacket.tag != TAG_EEG_4 && subpacket.tag != TAG_EEG_8) {
+                        return@forEach
+                    }
+
+                    val nChannels = if (subpacket.tag == TAG_EEG_4) 4 else 8
+                    val decoded = decodeEegData(subpacket.data, nChannels) ?: return@forEach
+                    appendedSamplesFromSubpackets += appendDecodedSamplesLocked(decoded)
+                }
+            }
+            if (appendedSamplesFromSubpackets > 0) {
+                return
+            }
+        }
+
+        // Fallback for firmware variants where EEG payload comes unwrapped.
+        val rawDecoded = decodeFromRawPayload(combined)
+        if (rawDecoded.isEmpty()) {
             return
         }
 
         synchronized(lock) {
-            subpackets.forEach { subpacket ->
-                if (subpacket.tag != TAG_EEG_4 && subpacket.tag != TAG_EEG_8) {
-                    return@forEach
-                }
-
-                val nChannels = if (subpacket.tag == TAG_EEG_4) 4 else 8
-                val decoded = decodeEegData(subpacket.data, nChannels) ?: return@forEach
-
-                for (sampleIdx in decoded.indices) {
-                    val row = decoded[sampleIdx]
-                    if (row.isEmpty()) {
-                        continue
-                    }
-                    val mean = row.average()
-                    if (eegSignal.size >= MAX_SIGNAL_BUFFER) {
-                        eegSignal.removeFirst()
-                    }
-                    eegSignal.addLast(mean)
-                }
+            rawDecoded.forEach { decoded ->
+                appendDecodedSamplesLocked(decoded)
             }
         }
+    }
+
+    private fun appendDecodedSamplesLocked(decoded: Array<DoubleArray>): Int {
+        var appended = 0
+        for (sampleIdx in decoded.indices) {
+            val row = decoded[sampleIdx]
+            if (row.isEmpty()) {
+                continue
+            }
+            val mean = row.average()
+            if (eegSignal.size >= MAX_SIGNAL_BUFFER) {
+                eegSignal.removeFirst()
+            }
+            eegSignal.addLast(mean)
+            appended += 1
+        }
+        return appended
+    }
+
+    private fun decodeFromRawPayload(payload: ByteArray): List<Array<DoubleArray>> {
+        if (payload.isEmpty()) {
+            return emptyList()
+        }
+
+        val decoded = ArrayList<Array<DoubleArray>>()
+
+        // Format A: [TAG][4-byte subheader][28-byte EEG], possibly repeated.
+        if (payload.size >= SUBPACKET_HEADER_SIZE + 28) {
+            var offset = 0
+            while (offset + SUBPACKET_HEADER_SIZE + 28 <= payload.size) {
+                val tag = payload[offset].toInt() and 0xFF
+                if (tag != TAG_EEG_4 && tag != TAG_EEG_8) {
+                    break
+                }
+                val nChannels = if (tag == TAG_EEG_4) 4 else 8
+                val start = offset + SUBPACKET_HEADER_SIZE
+                val end = start + 28
+                decodeEegData(payload.copyOfRange(start, end), nChannels)?.let { decoded.add(it) }
+                offset = end
+            }
+            if (decoded.isNotEmpty()) {
+                return decoded
+            }
+        }
+
+        // Format B: plain 28-byte EEG chunks with no tag/header.
+        if (payload.size >= 28) {
+            var offset = 0
+            while (offset + 28 <= payload.size) {
+                val chunk = payload.copyOfRange(offset, offset + 28)
+                val eeg8 = decodeEegData(chunk, 8)
+                if (eeg8 != null && hasSignalVariance(eeg8)) {
+                    decoded.add(eeg8)
+                } else {
+                    val eeg4 = decodeEegData(chunk, 4)
+                    if (eeg4 != null && hasSignalVariance(eeg4)) {
+                        decoded.add(eeg4)
+                    }
+                }
+                offset += 28
+            }
+        }
+
+        return decoded
+    }
+
+    private fun hasSignalVariance(decoded: Array<DoubleArray>): Boolean {
+        var sum = 0.0
+        var sumSq = 0.0
+        var count = 0
+
+        for (row in decoded) {
+            for (value in row) {
+                sum += value
+                sumSq += value * value
+                count += 1
+            }
+        }
+
+        if (count <= 1) {
+            return false
+        }
+
+        val mean = sum / count.toDouble()
+        val variance = (sumSq / count.toDouble()) - (mean * mean)
+        return variance > 1e-6
+    }
+
+    private fun drainCompletePacketsLocked(pending: MutableList<Byte>): List<ByteArray> {
+        val packets = ArrayList<ByteArray>()
+
+        if (pending.size > MAX_PENDING_BYTES) {
+            val drop = pending.size - MAX_PENDING_BYTES
+            repeat(drop) { pending.removeAt(0) }
+        }
+
+        while (pending.isNotEmpty()) {
+            val packetLength = pending[0].toInt() and 0xFF
+            if (packetLength < PACKET_HEADER_SIZE || packetLength > MAX_PACKET_LENGTH) {
+                pending.removeAt(0)
+                continue
+            }
+
+            if (pending.size < packetLength) {
+                break
+            }
+
+            val packet = ByteArray(packetLength)
+            for (index in 0 until packetLength) {
+                packet[index] = pending[index]
+            }
+            repeat(packetLength) { pending.removeAt(0) }
+            packets.add(packet)
+        }
+
+        return packets
     }
 
     private fun parseSubpackets(payload: ByteArray): List<MuseSubpacket> {
@@ -525,12 +726,37 @@ class OpenMuseAthenaGateway(
         )
 
         val alpha = bandPowers[BrainBand.ALPHA] ?: 0.0
-        val theta = bandPowers[BrainBand.THETA] ?: 0.0
-        val beta = bandPowers[BrainBand.BETA] ?: 0.0
-        val baseline = max(1e-9, alpha + theta + beta)
+        val dominantEntry = bandPowers.maxByOrNull { entry -> entry.value }
+        latestDominantBand = dominantEntry?.key ?: BrainBand.ALPHA
+        val dominantPower = dominantEntry?.value ?: 0.0
 
-        latestNormalizedAlpha = (alpha / baseline).coerceIn(0.0, 1.0)
-        latestDominantBand = bandPowers.maxByOrNull { it.value }?.key ?: BrainBand.ALPHA
+        val totalPower = bandPowers.values.sum()
+        latestTotalPower = totalPower
+        if (totalPower > 1e-9) {
+            val alphaRatio = (alpha / totalPower).coerceIn(0.0, 1.0)
+            val dominantRatio = (dominantPower / totalPower).coerceIn(0.0, 1.0)
+            latestAlphaRatio = alphaRatio
+            latestDominantRatio = dominantRatio
+            latestNormalizedAlpha = ((alphaRatio * 0.55) + (dominantRatio * 0.45)).coerceIn(0.0, 1.0)
+            return
+        }
+
+        // Spectral fallback: derive activity from RMS and slope when FFT bins collapse.
+        val rms = sqrt(centered.map { sample -> sample * sample }.average())
+        val slope = if (centered.size <= 1) {
+            0.0
+        } else {
+            var sumDiff = 0.0
+            for (index in 1 until centered.size) {
+                sumDiff += abs(centered[index] - centered[index - 1])
+            }
+            sumDiff / (centered.size - 1).toDouble()
+        }
+        val instantActivity = rms + (slope * 0.7)
+        latestActivity = (latestActivity * 0.85) + (instantActivity * 0.15)
+        latestAlphaRatio = 0.0
+        latestDominantRatio = 0.0
+        latestNormalizedAlpha = (latestActivity / (latestActivity + 35.0)).coerceIn(0.0, 1.0)
     }
 
     private fun centerSignal(signal: DoubleArray): DoubleArray {
@@ -656,8 +882,19 @@ class OpenMuseAthenaGateway(
             eegCharacteristic = null
             otherCharacteristic = null
             eegSignal.clear()
+            eegPendingBytes.clear()
+            otherPendingBytes.clear()
             latestDominantBand = BrainBand.ALPHA
             latestNormalizedAlpha = 0.0
+            latestActivity = 0.0
+            latestAlphaRatio = 0.0
+            latestDominantRatio = 0.0
+            latestTotalPower = 0.0
+            notificationCount = 0L
+            eegNotificationCount = 0L
+            otherNotificationCount = 0L
+            lastNotificationBytes = 0
+            lastPacketPreviewHex = "-"
             current
         } ?: return
 
@@ -694,6 +931,8 @@ class OpenMuseAthenaGateway(
         private const val TAG_ACC_GYRO = 0x47
         private const val TAG_BATTERY_88 = 0x88
         private const val TAG_BATTERY_98 = 0x98
+        private const val MAX_PACKET_LENGTH = 255
+        private const val MAX_PENDING_BYTES = 4096
 
         private val UUID_MUSE_SERVICE: UUID = UUID.fromString("273e0000-4c4d-454d-96be-f03bac821358")
         private val UUID_CONTROL: UUID = UUID.fromString("273e0001-4c4d-454d-96be-f03bac821358")
