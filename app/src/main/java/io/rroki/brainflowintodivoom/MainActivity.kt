@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
 import io.rroki.brainflowintodivoom.data.bluetooth.BluetoothPermissionPolicy
 import io.rroki.brainflowintodivoom.presentation.MainRoute
+import io.rroki.brainflowintodivoom.ui.theme.BrainFlowIntoDivoomTheme
 
 class MainActivity : ComponentActivity() {
     private var hasBluetoothPermissions by mutableStateOf(false)
@@ -26,7 +27,9 @@ class MainActivity : ComponentActivity() {
         requestBluetoothPermissionsIfNeeded()
 
         setContent {
-            MainRoute(hasBluetoothPermissions = hasBluetoothPermissions)
+            BrainFlowIntoDivoomTheme {
+                MainRoute(hasBluetoothPermissions = hasBluetoothPermissions)
+            }
         }
     }
 

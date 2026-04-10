@@ -37,12 +37,34 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.rroki.brainflowintodivoom.R
 import io.rroki.brainflowintodivoom.domain.model.BfiWaveformParameter
 import io.rroki.brainflowintodivoom.domain.model.DisplayMode
 import io.rroki.brainflowintodivoom.domain.model.MusePowerMode
+import io.rroki.brainflowintodivoom.ui.theme.cardBorder
+import io.rroki.brainflowintodivoom.ui.theme.cardGlass
+import io.rroki.brainflowintodivoom.ui.theme.chipContainer
+import io.rroki.brainflowintodivoom.ui.theme.chipLabel
+import io.rroki.brainflowintodivoom.ui.theme.defaultButton
+import io.rroki.brainflowintodivoom.ui.theme.diagnosticText
+import io.rroki.brainflowintodivoom.ui.theme.emptyState
+import io.rroki.brainflowintodivoom.ui.theme.filterLabel
+import io.rroki.brainflowintodivoom.ui.theme.heartHint
+import io.rroki.brainflowintodivoom.ui.theme.oxygenHint
+import io.rroki.brainflowintodivoom.ui.theme.permissionWarning
+import io.rroki.brainflowintodivoom.ui.theme.powerSelected
+import io.rroki.brainflowintodivoom.ui.theme.previewPanel
+import io.rroki.brainflowintodivoom.ui.theme.readyText
+import io.rroki.brainflowintodivoom.ui.theme.screenGradientBottom
+import io.rroki.brainflowintodivoom.ui.theme.screenGradientMiddle
+import io.rroki.brainflowintodivoom.ui.theme.screenGradientTop
+import io.rroki.brainflowintodivoom.ui.theme.secondaryLabel
+import io.rroki.brainflowintodivoom.ui.theme.selectedButton
+import io.rroki.brainflowintodivoom.ui.theme.signalValue
 
 @Composable
 fun MainRoute(
@@ -88,57 +110,73 @@ fun MainScreen(
     onWaveformParameterSelected: (BfiWaveformParameter) -> Unit,
     onPowerModeSelected: (MusePowerMode) -> Unit
 ) {
+    val colors = MaterialTheme.colorScheme
     val scrollState = rememberScrollState()
-    val cardColors = CardDefaults.cardColors(containerColor = Color(0x1AFFFFFF))
+    val cardColors = CardDefaults.cardColors(containerColor = colors.cardGlass)
 
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF05070F)) {
+    Surface(modifier = Modifier.fillMaxSize(), color = colors.background) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     brush = Brush.verticalGradient(
-                        colors = listOf(Color(0xFF0B1022), Color(0xFF070C17), Color(0xFF04060D))
+                        colors = listOf(colors.screenGradientTop, colors.screenGradientMiddle, colors.screenGradientBottom)
                     )
                 )
                 .verticalScroll(scrollState)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Card(colors = cardColors, border = BorderStroke(1.dp, Color(0x33B4F2FF))) {
+            Card(colors = cardColors, border = BorderStroke(1.dp, colors.cardBorder)) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Neuro Visual Studio",
+                        text = stringResource(R.string.main_title),
                         style = MaterialTheme.typography.headlineSmall,
-                        color = Color(0xFFE8EEFF),
+                        color = colors.onSurface,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Divoom x Muse S Athena",
-                        color = Color(0xFF9FB0D8)
+                        text = stringResource(R.string.main_subtitle),
+                        color = colors.onSurfaceVariant
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AssistChip(
                             onClick = {},
-                            label = { Text("Muse: ${state.museConnectionStateText}", color = Color(0xFFEAF0FF)) },
+                            label = {
+                                Text(
+                                    stringResource(R.string.main_chip_muse, state.museConnectionStateText),
+                                    color = colors.chipLabel
+                                )
+                            },
                             colors = AssistChipDefaults.assistChipColors(
-                                containerColor = Color(0xFF1A2236),
-                                labelColor = Color(0xFFEAF0FF)
+                                containerColor = colors.chipContainer,
+                                labelColor = colors.chipLabel
                             )
                         )
                         AssistChip(
                             onClick = {},
-                            label = { Text("Divoom: ${state.connectionStateText}", color = Color(0xFFEAF0FF)) },
+                            label = {
+                                Text(
+                                    stringResource(R.string.main_chip_divoom, state.connectionStateText),
+                                    color = colors.chipLabel
+                                )
+                            },
                             colors = AssistChipDefaults.assistChipColors(
-                                containerColor = Color(0xFF1A2236),
-                                labelColor = Color(0xFFEAF0FF)
+                                containerColor = colors.chipContainer,
+                                labelColor = colors.chipLabel
                             )
                         )
                         AssistChip(
                             onClick = {},
-                            label = { Text("Profile: ${state.effectiveMuseProfileLabel}", color = Color(0xFFEAF0FF)) },
+                            label = {
+                                Text(
+                                    stringResource(R.string.main_chip_profile, state.effectiveMuseProfileLabel),
+                                    color = colors.chipLabel
+                                )
+                            },
                             colors = AssistChipDefaults.assistChipColors(
-                                containerColor = Color(0xFF1A2236),
-                                labelColor = Color(0xFFEAF0FF)
+                                containerColor = colors.chipContainer,
+                                labelColor = colors.chipLabel
                             )
                         )
                     }
@@ -147,14 +185,22 @@ fun MainScreen(
 
             Card(colors = cardColors) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Waveform Source", color = Color(0xFFE8EEFF), fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "OSC Path: ${state.selectedParameterOscPath}",
-                        color = Color(0xFF9FB0D8)
+                        stringResource(R.string.main_waveform_source),
+                        color = colors.onSurface,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Current: ${"%.3f".format(state.selectedParameterValue)} ${state.selectedParameterUnit}",
-                        color = Color(0xFFB6FFD9)
+                        text = stringResource(R.string.main_osc_path, state.selectedParameterOscPath),
+                        color = colors.onSurfaceVariant
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.main_current_value,
+                            "%.3f".format(state.selectedParameterValue),
+                            state.selectedParameterUnit
+                        ),
+                        color = colors.signalValue
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -166,22 +212,22 @@ fun MainScreen(
                                 .background(Color(state.selectedWaveformParameter.colorArgb))
                         )
                         Text(
-                            text = "Theme: ${state.selectedWaveformParameter.label}",
-                            color = Color(0xFFD2DBF6)
+                            text = stringResource(R.string.main_theme_label, state.selectedWaveformParameter.label),
+                            color = colors.secondaryLabel
                         )
                     }
 
                     if (state.selectedWaveformParameter == BfiWaveformParameter.BIOMETRICS_HEART_BPM) {
                         Text(
-                            text = "Heart Rate mode: BPM-synced pulse animation",
-                            color = Color(0xFFFDA4AF)
+                            text = stringResource(R.string.main_heart_mode_hint),
+                            color = colors.heartHint
                         )
                     }
 
                     if (state.selectedWaveformParameter == BfiWaveformParameter.BIOMETRICS_OXYGEN) {
                         Text(
-                            text = "Oxygen mode: intensity gradient visualization",
-                            color = Color(0xFF67E8F9)
+                            text = stringResource(R.string.main_oxygen_mode_hint),
+                            color = colors.oxygenHint
                         )
                     }
 
@@ -212,8 +258,8 @@ fun MainScreen(
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = parameterColor.copy(alpha = 0.25f),
                                     selectedLabelColor = Color.White,
-                                    containerColor = Color(0xFF1A2236),
-                                    labelColor = Color(0xFFDCE6FF)
+                                    containerColor = colors.chipContainer,
+                                    labelColor = colors.filterLabel
                                 )
                             )
                         }
@@ -223,20 +269,24 @@ fun MainScreen(
 
             Card(colors = cardColors) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Muse Power Mode", color = Color(0xFFE8EEFF), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(R.string.main_muse_power_mode),
+                        color = colors.onSurface,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     Text(
                         text = when {
                             state.selectedPowerMode == MusePowerMode.AUTO && state.selectedWaveformParameter.requiresOptics -> {
-                                "Auto mode selects Full Biometrics because this parameter requires Optics/PPG."
+                                stringResource(R.string.main_auto_mode_full)
                             }
 
                             state.selectedPowerMode == MusePowerMode.AUTO -> {
-                                "Auto mode selects EEG Only to reduce battery usage."
+                                stringResource(R.string.main_auto_mode_eeg)
                             }
 
                             else -> state.selectedPowerMode.description
                         },
-                        color = Color(0xFF9FB0D8)
+                        color = colors.onSurfaceVariant
                     )
                     Row(
                         modifier = Modifier
@@ -250,10 +300,10 @@ fun MainScreen(
                                 onClick = { onPowerModeSelected(mode) },
                                 label = { Text(mode.label) },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = Color(0xFF264064),
+                                    selectedContainerColor = colors.powerSelected,
                                     selectedLabelColor = Color.White,
-                                    containerColor = Color(0xFF1A2236),
-                                    labelColor = Color(0xFFDCE6FF)
+                                    containerColor = colors.chipContainer,
+                                    labelColor = colors.filterLabel
                                 )
                             )
                         }
@@ -262,27 +312,37 @@ fun MainScreen(
             }
 
             state.lastError?.let { error ->
-                Text(text = "error=$error", color = Color(0xFFFF8A80))
+                Text(text = stringResource(R.string.main_error, error), color = colors.error)
             }
 
             Card(colors = cardColors) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Device Selection", color = Color(0xFFE8EEFF), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            stringResource(R.string.main_device_selection),
+                            color = colors.onSurface,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
                             onClick = onScanDevicesClick,
                             enabled = state.hasBluetoothPermissions && !state.isScanningDivoomDevices
                         ) {
-                            Text(if (state.isScanningDivoomDevices) "Scanning..." else "Scan Devices")
+                            Text(
+                                if (state.isScanningDivoomDevices) {
+                                    stringResource(R.string.main_scanning)
+                                } else {
+                                    stringResource(R.string.main_scan_devices)
+                                }
+                            )
                         }
                     }
 
                     if (state.availableDivoomDevices.isEmpty()) {
                         Text(
-                            text = "No discovered devices yet",
-                            color = Color(0xFFB8C7E6)
+                            text = stringResource(R.string.main_no_devices),
+                            color = colors.emptyState
                         )
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -293,12 +353,23 @@ fun MainScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     enabled = !state.isScanningDivoomDevices,
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (selected) Color(0xFF14532D) else Color(0xFF1F2937)
+                                        containerColor = if (selected) colors.selectedButton else colors.defaultButton
                                     )
                                 ) {
-                                    val source = if (device.isBonded) "paired" else "discovered"
+                                    val source = if (device.isBonded) {
+                                        stringResource(R.string.main_device_source_paired)
+                                    } else {
+                                        stringResource(R.string.main_device_source_discovered)
+                                    }
                                     val suffix = device.address.takeLast(5)
-                                    Text("${device.name} [$source • ..$suffix]")
+                                    Text(
+                                        stringResource(
+                                            R.string.main_device_item,
+                                            device.name.orEmpty(),
+                                            source,
+                                            suffix
+                                        )
+                                    )
                                 }
                             }
                         }
@@ -309,13 +380,19 @@ fun MainScreen(
                             onClick = onConnectMuseClick,
                             enabled = state.hasBluetoothPermissions && !state.isMuseConnected
                         ) {
-                            Text(if (state.brainFlowRuntimeAvailable) "Connect as Muse" else "Runtime Missing")
+                            Text(
+                                if (state.brainFlowRuntimeAvailable) {
+                                    stringResource(R.string.main_connect_muse)
+                                } else {
+                                    stringResource(R.string.main_runtime_missing)
+                                }
+                            )
                         }
                         Button(
                             onClick = onConnectClick,
                             enabled = state.hasBluetoothPermissions && !state.isDivoomConnected
                         ) {
-                            Text("Connect as Divoom")
+                            Text(stringResource(R.string.main_connect_divoom))
                         }
                     }
 
@@ -324,13 +401,13 @@ fun MainScreen(
                             onClick = onDisconnectMuseClick,
                             enabled = state.isMuseConnected
                         ) {
-                            Text("Disconnect Muse")
+                            Text(stringResource(R.string.main_disconnect_muse))
                         }
                         Button(
                             onClick = onDisconnectClick,
                             enabled = state.isDivoomConnected
                         ) {
-                            Text("Disconnect Divoom")
+                            Text(stringResource(R.string.main_disconnect_divoom))
                         }
                     }
 
@@ -339,10 +416,16 @@ fun MainScreen(
                             onClick = onSendFrameClick,
                             enabled = state.isDivoomConnected
                         ) {
-                            Text("Send Frame")
+                            Text(stringResource(R.string.main_send_frame))
                         }
                         Button(onClick = onAutoSendToggle) {
-                            Text(if (state.autoSendEnabled) "Auto: ON" else "Auto: OFF")
+                            Text(
+                                if (state.autoSendEnabled) {
+                                    stringResource(R.string.main_auto_on)
+                                } else {
+                                    stringResource(R.string.main_auto_off)
+                                }
+                            )
                         }
                     }
 
@@ -350,26 +433,26 @@ fun MainScreen(
                         Button(
                             onClick = { onSendIntervalSelected(100L) },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (state.sendIntervalMs == 100L) Color(0xFF14532D) else Color(0xFF1F2937)
+                                containerColor = if (state.sendIntervalMs == 100L) colors.selectedButton else colors.defaultButton
                             )
                         ) {
-                            Text("100ms")
+                            Text(stringResource(R.string.main_interval_100ms))
                         }
                         Button(
                             onClick = { onSendIntervalSelected(150L) },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (state.sendIntervalMs == 150L) Color(0xFF14532D) else Color(0xFF1F2937)
+                                containerColor = if (state.sendIntervalMs == 150L) colors.selectedButton else colors.defaultButton
                             )
                         ) {
-                            Text("150ms")
+                            Text(stringResource(R.string.main_interval_150ms))
                         }
                         Button(
                             onClick = { onSendIntervalSelected(200L) },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (state.sendIntervalMs == 200L) Color(0xFF14532D) else Color(0xFF1F2937)
+                                containerColor = if (state.sendIntervalMs == 200L) colors.selectedButton else colors.defaultButton
                             )
                         ) {
-                            Text("200ms")
+                            Text(stringResource(R.string.main_interval_200ms))
                         }
                     }
                 }
@@ -377,13 +460,17 @@ fun MainScreen(
 
             Card(colors = cardColors) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Visualization Style", color = Color(0xFFE8EEFF), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(R.string.main_visualization_style),
+                        color = colors.onSurface,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(onClick = { onModeSelected(DisplayMode.OSCILLOSCOPE) }) {
-                            Text("Oscilloscope")
+                            Text(stringResource(R.string.main_mode_oscilloscope))
                         }
                         Button(onClick = { onModeSelected(DisplayMode.VRCHAT_LOGO) }) {
-                            Text("Bubble")
+                            Text(stringResource(R.string.main_mode_bubble))
                         }
                     }
                 }
@@ -392,7 +479,7 @@ fun MainScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF04070D))
+                    .background(colors.previewPanel)
                     .padding(12.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -401,30 +488,59 @@ fun MainScreen(
 
             Card(colors = cardColors) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Diagnostics", color = Color(0xFFE8EEFF), fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "normalized=${"%.2f".format(state.normalizedValue)}  packet=${state.packetSizeBytes} bytes",
-                        color = Color(0xFF9AA8C2)
+                        stringResource(R.string.main_diagnostics),
+                        color = colors.onSurface,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "museRaw: notif=${state.museNotificationCount} (eeg=${state.museEegNotificationCount}/other=${state.museOtherNotificationCount})  lastPkt=${state.museLastPacketBytes} bytes  eegSamples=${state.museEegSampleCount}",
-                        color = Color(0xFF9AA8C2)
+                        text = stringResource(
+                            R.string.main_diagnostics_normalized,
+                            "%.2f".format(state.normalizedValue),
+                            state.packetSizeBytes
+                        ),
+                        color = colors.diagnosticText
                     )
                     Text(
-                        text = "museBands: alphaRatio=${"%.4f".format(state.museAlphaRatio)}  dominantRatio=${"%.4f".format(state.museDominantRatio)}  totalPower=${"%.6f".format(state.museTotalPower)}",
-                        color = Color(0xFF9AA8C2)
+                        text = stringResource(
+                            R.string.main_diagnostics_muse_raw,
+                            state.museNotificationCount,
+                            state.museEegNotificationCount,
+                            state.museOtherNotificationCount,
+                            state.museLastPacketBytes,
+                            state.museEegSampleCount
+                        ),
+                        color = colors.diagnosticText
                     )
                     Text(
-                        text = "museBio: ppgSamples=${state.musePpgSampleCount}  heart=${"%.1f".format(state.museHeartBpm)} bpm  oxygen=${"%.1f".format(state.museOxygenPercent)}%",
-                        color = Color(0xFF9AA8C2)
+                        text = stringResource(
+                            R.string.main_diagnostics_muse_bands,
+                            "%.4f".format(state.museAlphaRatio),
+                            "%.4f".format(state.museDominantRatio),
+                            "%.6f".format(state.museTotalPower)
+                        ),
+                        color = colors.diagnosticText
                     )
                     Text(
-                        text = "museActivity=${"%.4f".format(state.museActivity)}  reconnectAttempt=${state.reconnectAttempt}",
-                        color = Color(0xFF9AA8C2)
+                        text = stringResource(
+                            R.string.main_diagnostics_muse_bio,
+                            state.musePpgSampleCount,
+                            "%.1f".format(state.museHeartBpm),
+                            "%.1f".format(state.museOxygenPercent)
+                        ),
+                        color = colors.diagnosticText
                     )
                     Text(
-                        text = "musePacketHead=${state.musePacketPreviewHex}",
-                        color = Color(0xFF9AA8C2)
+                        text = stringResource(
+                            R.string.main_diagnostics_muse_activity,
+                            "%.4f".format(state.museActivity),
+                            state.reconnectAttempt
+                        ),
+                        color = colors.diagnosticText
+                    )
+                    Text(
+                        text = stringResource(R.string.main_diagnostics_packet_head, state.musePacketPreviewHex),
+                        color = colors.diagnosticText
                     )
                 }
             }
@@ -432,11 +548,11 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = if (state.hasBluetoothPermissions) {
-                    "Ready: parameter-selectable Muse streaming with profile-aware power optimization."
+                    stringResource(R.string.main_ready)
                 } else {
-                    "Grant Bluetooth permissions to connect Muse and Divoom."
+                    stringResource(R.string.main_permissions_required)
                 },
-                color = if (state.hasBluetoothPermissions) Color(0xFF6EE7B7) else Color(0xFFFFB74D)
+                color = if (state.hasBluetoothPermissions) colors.readyText else colors.permissionWarning
             )
         }
     }

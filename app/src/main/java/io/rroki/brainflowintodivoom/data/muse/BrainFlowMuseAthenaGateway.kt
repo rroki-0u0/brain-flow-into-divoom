@@ -3,7 +3,9 @@ package io.rroki.brainflowintodivoom.data.muse
 import io.rroki.brainflowintodivoom.domain.model.BrainBand
 import java.lang.reflect.Modifier
 import kotlin.math.PI
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -192,43 +194,150 @@ class BrainFlowMuseAthenaGateway : MuseStreamGateway {
     }
 
     private fun calculateBandPowers(signal: DoubleArray, samplingRate: Int): Map<BrainBand, Double> {
+        val spectrum = computePowerSpectrum(signal, samplingRate)
+        if (spectrum == null) {
+            return mapOf(
+                BrainBand.DELTA to 0.0,
+                BrainBand.THETA to 0.0,
+                BrainBand.ALPHA to 0.0,
+                BrainBand.BETA to 0.0,
+                BrainBand.GAMMA to 0.0
+            )
+        }
+
         return mapOf(
-            BrainBand.DELTA to calculateBandPower(signal, samplingRate, 1.0, 4.0),
-            BrainBand.THETA to calculateBandPower(signal, samplingRate, 4.0, 8.0),
-            BrainBand.ALPHA to calculateBandPower(signal, samplingRate, 8.0, 12.0),
-            BrainBand.BETA to calculateBandPower(signal, samplingRate, 12.0, 30.0),
-            BrainBand.GAMMA to calculateBandPower(signal, samplingRate, 30.0, 45.0)
+            BrainBand.DELTA to calculateBandPowerFromSpectrum(spectrum, 1.0, 4.0),
+            BrainBand.THETA to calculateBandPowerFromSpectrum(spectrum, 4.0, 8.0),
+            BrainBand.ALPHA to calculateBandPowerFromSpectrum(spectrum, 8.0, 12.0),
+            BrainBand.BETA to calculateBandPowerFromSpectrum(spectrum, 12.0, 30.0),
+            BrainBand.GAMMA to calculateBandPowerFromSpectrum(spectrum, 30.0, 45.0)
         )
     }
 
-    private fun calculateBandPower(signal: DoubleArray, samplingRate: Int, lowHz: Double, highHz: Double): Double {
-        val n = signal.size
-        if (n <= 1 || samplingRate <= 0) {
+    private data class PowerSpectrum(
+        val frequencyResolutionHz: Double,
+        val binPowers: DoubleArray
+    )
+
+    private fun computePowerSpectrum(signal: DoubleArray, samplingRate: Int): PowerSpectrum? {
+        if (signal.size <= 1 || samplingRate <= 0) {
+            return null
+        }
+
+        val fftSize = nextPowerOfTwo(signal.size)
+        if (fftSize <= 1) {
+            return null
+        }
+
+        val real = DoubleArray(fftSize)
+        val imag = DoubleArray(fftSize)
+        for (index in signal.indices) {
+            real[index] = signal[index]
+        }
+
+        fftInPlace(real, imag)
+
+        val nyquistBin = fftSize / 2
+        val binPowers = DoubleArray(nyquistBin + 1)
+        for (bin in 1..nyquistBin) {
+            val re = real[bin]
+            val im = imag[bin]
+            binPowers[bin] = re * re + im * im
+        }
+
+        return PowerSpectrum(
+            frequencyResolutionHz = samplingRate.toDouble() / fftSize.toDouble(),
+            binPowers = binPowers
+        )
+    }
+
+    private fun calculateBandPowerFromSpectrum(
+        spectrum: PowerSpectrum,
+        lowHz: Double,
+        highHz: Double
+    ): Double {
+        val frequencyResolution = spectrum.frequencyResolutionHz
+        if (frequencyResolution <= 0.0) {
             return 0.0
         }
 
-        val frequencyResolution = samplingRate.toDouble() / n.toDouble()
-        val startBin = max(1, kotlin.math.ceil(lowHz / frequencyResolution).toInt())
-        val maxNyquistBin = n / 2
-        val endBin = min(maxNyquistBin, kotlin.math.floor(highHz / frequencyResolution).toInt())
+        val startBin = max(1, ceil(lowHz / frequencyResolution).toInt())
+        val endBin = min(spectrum.binPowers.lastIndex, floor(highHz / frequencyResolution).toInt())
         if (endBin < startBin) {
             return 0.0
         }
 
         var power = 0.0
-        for (k in startBin..endBin) {
-            var real = 0.0
-            var imag = 0.0
-            for (t in signal.indices) {
-                val angle = (2.0 * PI * k * t) / n
-                val sample = signal[t]
-                real += sample * cos(angle)
-                imag -= sample * sin(angle)
-            }
-            power += real * real + imag * imag
+        for (bin in startBin..endBin) {
+            power += spectrum.binPowers[bin]
         }
 
         return power
+    }
+
+    private fun fftInPlace(real: DoubleArray, imag: DoubleArray) {
+        val n = real.size
+        var j = 0
+        for (i in 1 until n) {
+            var bit = n shr 1
+            while ((j and bit) != 0) {
+                j = j xor bit
+                bit = bit shr 1
+            }
+            j = j xor bit
+            if (i < j) {
+                val tempReal = real[i]
+                val tempImag = imag[i]
+                real[i] = real[j]
+                imag[i] = imag[j]
+                real[j] = tempReal
+                imag[j] = tempImag
+            }
+        }
+
+        var len = 2
+        while (len <= n) {
+            val angle = -2.0 * PI / len.toDouble()
+            val wLenReal = cos(angle)
+            val wLenImag = sin(angle)
+
+            var offset = 0
+            while (offset < n) {
+                var wReal = 1.0
+                var wImag = 0.0
+                val half = len / 2
+                for (k in 0 until half) {
+                    val evenIndex = offset + k
+                    val oddIndex = evenIndex + half
+
+                    val oddReal = (real[oddIndex] * wReal) - (imag[oddIndex] * wImag)
+                    val oddImag = (real[oddIndex] * wImag) + (imag[oddIndex] * wReal)
+
+                    val evenReal = real[evenIndex]
+                    val evenImag = imag[evenIndex]
+
+                    real[evenIndex] = evenReal + oddReal
+                    imag[evenIndex] = evenImag + oddImag
+                    real[oddIndex] = evenReal - oddReal
+                    imag[oddIndex] = evenImag - oddImag
+
+                    val nextWReal = (wReal * wLenReal) - (wImag * wLenImag)
+                    wImag = (wReal * wLenImag) + (wImag * wLenReal)
+                    wReal = nextWReal
+                }
+                offset += len
+            }
+
+            len = len shl 1
+        }
+    }
+
+    private fun nextPowerOfTwo(value: Int): Int {
+        var result = 1
+        while (result < value) {
+            result = result shl 1
+        }
+        return result
     }
 
     private fun resolveCandidateBoardIds(): List<Int> {
