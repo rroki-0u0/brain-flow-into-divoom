@@ -1,16 +1,34 @@
 package io.rroki.brainflowintodivoom.data.muse
 
+import io.rroki.brainflowintodivoom.domain.model.BrainBand
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
-/**
- * Minimal stream abstraction before BrainFlow integration.
- * Replace with a real BrainFlow-backed implementation during device integration.
- */
+data class MuseReading(
+    val normalizedAlpha: Double,
+    val dominantBand: BrainBand
+)
+
 interface MuseStreamGateway {
-    fun streamAlphaNormalized(): Flow<Double>
+    fun isRuntimeAvailable(): Boolean
+    fun isConnected(): Boolean
+    suspend fun connect(deviceAddress: String? = null): Result<Unit>
+    suspend fun disconnect()
+    fun streamReadings(pollIntervalMs: Long = 120L): Flow<MuseReading>
 }
 
 class PlaceholderMuseStreamGateway : MuseStreamGateway {
-    override fun streamAlphaNormalized(): Flow<Double> = emptyFlow()
+    override fun isRuntimeAvailable(): Boolean = false
+
+    override fun isConnected(): Boolean = false
+
+    override suspend fun connect(deviceAddress: String?): Result<Unit> {
+        return Result.failure(IllegalStateException("BrainFlow runtime is unavailable"))
+    }
+
+    override suspend fun disconnect() {
+        // no-op
+    }
+
+    override fun streamReadings(pollIntervalMs: Long): Flow<MuseReading> = emptyFlow()
 }

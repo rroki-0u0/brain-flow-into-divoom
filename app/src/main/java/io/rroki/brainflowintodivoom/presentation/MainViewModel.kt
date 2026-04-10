@@ -8,15 +8,20 @@ import io.rroki.brainflowintodivoom.data.divoom.DivoomConnectionState
 import io.rroki.brainflowintodivoom.data.divoom.DivoomDiscoveredDevice
 import io.rroki.brainflowintodivoom.data.divoom.DivoomPacketEncoder
 import io.rroki.brainflowintodivoom.data.divoom.FrameDispatchQueue
+import io.rroki.brainflowintodivoom.data.muse.MuseStreamGateway
+import io.rroki.brainflowintodivoom.data.muse.OpenMuseAthenaGateway
 import io.rroki.brainflowintodivoom.domain.model.BrainBand
 import io.rroki.brainflowintodivoom.domain.model.DisplayMode
 import io.rroki.brainflowintodivoom.domain.processing.OscilloscopeFrameGenerator
 import io.rroki.brainflowintodivoom.domain.processing.VrchatLogoFrameGenerator
 import java.io.IOException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.sin
@@ -47,17 +52,83 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val logoGenerator = VrchatLogoFrameGenerator()
     private val encoder = DivoomPacketEncoder()
     private val divoomClient = DivoomBluetoothClient(application.applicationContext)
+    private val museGateway: MuseStreamGateway = OpenMuseAthenaGateway(application.applicationContext)
     private var connectionState = DivoomConnectionState.DISCONNECTED
+    private var fakeStreamJob: Job? = null
+    private var museStreamJob: Job? = null
     private val frameQueue = FrameDispatchQueue(minIntervalMs = 180L) { packet ->
         sendPacketWithRecovery(packet)
     }
 
-    private val _uiState = MutableStateFlow(MainUiState())
+    private val _uiState = MutableStateFlow(
+        MainUiState(brainFlowRuntimeAvailable = museGateway.isRuntimeAvailable())
+    )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     init {
         frameQueue.start(viewModelScope)
         startFakeStream()
+    }
+
+    fun connectToMuse() {
+        val current = _uiState.value
+        if (!current.brainFlowRuntimeAvailable) {
+            _uiState.value = current.copy(lastError = "Muse runtime is unavailable on this device")
+            return
+        }
+        if (current.isMuseConnected || current.museConnectionStateText == "connecting") {
+            return
+        }
+
+        _uiState.value = current.copy(
+            museConnectionStateText = "connecting",
+            lastError = null
+        )
+
+        viewModelScope.launch {
+            museGateway.connect(current.museDeviceAddress.takeIf { it.isNotBlank() })
+                .onSuccess {
+                    _uiState.value = _uiState.value.copy(
+                        isMuseConnected = true,
+                        isUsingMuseStream = true,
+                        museConnectionStateText = "connected",
+                        lastError = null
+                    )
+                    stopFakeStream()
+                    startMuseStreamCollection()
+                }
+                .onFailure { throwable ->
+                    _uiState.value = _uiState.value.copy(
+                        isMuseConnected = false,
+                        isUsingMuseStream = false,
+                        museConnectionStateText = "disconnected",
+                        lastError = throwable.message ?: "Muse connection failed"
+                    )
+                    startFakeStream()
+                }
+        }
+    }
+
+    fun disconnectFromMuse() {
+        museStreamJob?.cancel()
+        museStreamJob = null
+
+        viewModelScope.launch {
+            museGateway.disconnect()
+            _uiState.value = _uiState.value.copy(
+                isMuseConnected = false,
+                isUsingMuseStream = false,
+                museConnectionStateText = "disconnected"
+            )
+            startFakeStream()
+        }
+    }
+
+    fun setMuseDeviceAddress(address: String) {
+        _uiState.value = _uiState.value.copy(
+            museDeviceAddress = address,
+            lastError = null
+        )
     }
 
     fun onBluetoothPermissionChanged(granted: Boolean) {
@@ -180,7 +251,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startFakeStream() {
-        viewModelScope.launch {
+        if (fakeStreamJob?.isActive == true) {
+            return
+        }
+
+        fakeStreamJob = viewModelScope.launch {
             var step = 0
             while (true) {
                 val value = ((sin((step / 8.0) * PI / 2) + 1.0) / 2.0).coerceIn(0.0, 1.0)
@@ -201,6 +276,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 step++
                 delay(120L)
             }
+        }
+    }
+
+    private fun stopFakeStream() {
+        fakeStreamJob?.cancel()
+        fakeStreamJob = null
+    }
+
+    private fun startMuseStreamCollection() {
+        museStreamJob?.cancel()
+        museStreamJob = viewModelScope.launch {
+            museGateway.streamReadings(pollIntervalMs = 120L)
+                .catch { throwable ->
+                    _uiState.value = _uiState.value.copy(
+                        isMuseConnected = false,
+                        isUsingMuseStream = false,
+                        museConnectionStateText = "disconnected",
+                        lastError = throwable.message ?: "Muse stream failed"
+                    )
+                    startFakeStream()
+                }
+                .collect { reading ->
+                    updateState(
+                        mode = _uiState.value.mode,
+                        value = reading.normalizedAlpha,
+                        band = reading.dominantBand
+                    )
+                }
         }
     }
 
@@ -364,7 +467,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        fakeStreamJob?.cancel()
+        museStreamJob?.cancel()
         frameQueue.stop()
+        viewModelScope.launch {
+            museGateway.disconnect()
+        }
         divoomClient.close()
     }
 }

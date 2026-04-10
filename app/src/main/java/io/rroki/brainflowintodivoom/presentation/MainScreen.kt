@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,7 +54,10 @@ fun MainRoute(
         onDisconnectClick = mainViewModel::disconnectFromDivoom,
         onSendFrameClick = mainViewModel::sendCurrentFrame,
         onAutoSendToggle = mainViewModel::toggleAutoSend,
-        onSendIntervalSelected = mainViewModel::setSendIntervalMs
+        onSendIntervalSelected = mainViewModel::setSendIntervalMs,
+        onConnectMuseClick = mainViewModel::connectToMuse,
+        onDisconnectMuseClick = mainViewModel::disconnectFromMuse,
+        onMuseAddressChanged = mainViewModel::setMuseDeviceAddress
     )
 }
 
@@ -67,7 +71,10 @@ fun MainScreen(
     onDisconnectClick: () -> Unit,
     onSendFrameClick: () -> Unit,
     onAutoSendToggle: () -> Unit,
-    onSendIntervalSelected: (Long) -> Unit
+    onSendIntervalSelected: (Long) -> Unit,
+    onConnectMuseClick: () -> Unit,
+    onDisconnectMuseClick: () -> Unit,
+    onMuseAddressChanged: (String) -> Unit
 ) {
     val scrollState = rememberScrollState()
 
@@ -91,6 +98,10 @@ fun MainScreen(
                 color = Color(0xFF9AA8C2)
             )
             Text(
+                text = "source=${if (state.isUsingMuseStream) "muse" else "simulated"}  muse=${state.museConnectionStateText}",
+                color = if (state.isMuseConnected) Color(0xFF6EE7B7) else Color(0xFF9AA8C2)
+            )
+            Text(
                 text = "normalized=${"%.2f".format(state.normalizedValue)}  packet=${state.packetSizeBytes} bytes",
                 color = Color(0xFF9AA8C2)
             )
@@ -109,6 +120,29 @@ fun MainScreen(
 
             state.lastError?.let { error ->
                 Text(text = "error=$error", color = Color(0xFFFF8A80))
+            }
+
+            OutlinedTextField(
+                value = state.museDeviceAddress,
+                onValueChange = onMuseAddressChanged,
+                singleLine = true,
+                label = { Text("Muse MAC Address (optional)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = onConnectMuseClick,
+                    enabled = state.hasBluetoothPermissions && !state.isMuseConnected
+                ) {
+                    Text(if (state.brainFlowRuntimeAvailable) "Connect Muse" else "Connect Muse (runtime missing)")
+                }
+                Button(
+                    onClick = onDisconnectMuseClick,
+                    enabled = state.isMuseConnected
+                ) {
+                    Text("Disconnect Muse")
+                }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -221,7 +255,7 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = if (state.hasBluetoothPermissions) {
-                    "MVP status: simulated EEG stream running (120ms), Divoom send interval is adjustable."
+                    "MVP status: simulated EEG or Muse stream (120ms), Divoom send interval is adjustable."
                 } else {
                     "MVP status: grant Bluetooth permissions to connect Divoom."
                 },
