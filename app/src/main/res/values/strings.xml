@@ -1,0 +1,48 @@
+<resources>
+    <string name="app_name">BrainFlow Into Divoom</string>
+    <string name="main_title">Neuro Visual Studio</string>
+    <string name="main_subtitle">Divoom x Muse S Athena</string>
+    <string name="main_chip_muse">Muse: %1$s</string>
+    <string name="main_chip_divoom">Divoom: %1$s</string>
+    <string name="main_chip_profile">Profile: %1$s</string>
+    <string name="main_waveform_source">Waveform Source</string>
+    <string name="main_osc_path">OSC Path: %1$s</string>
+    <string name="main_current_value">Current: %1$s %2$s</string>
+    <string name="main_theme_label">Theme: %1$s</string>
+    <string name="main_heart_mode_hint">Heart Rate mode: BPM-synced pulse animation</string>
+    <string name="main_oxygen_mode_hint">Oxygen mode: intensity gradient visualization</string>
+    <string name="main_muse_power_mode">Muse Power Mode</string>
+    <string name="main_auto_mode_full">Auto mode selects Full Biometrics because this parameter requires Optics/PPG.</string>
+    <string name="main_auto_mode_eeg">Auto mode selects EEG Only to reduce battery usage.</string>
+    <string name="main_error">error=%1$s</string>
+    <string name="main_device_selection">Device Selection</string>
+    <string name="main_scanning">Scanning...</string>
+    <string name="main_scan_devices">Scan Devices</string>
+    <string name="main_no_devices">No discovered devices yet</string>
+    <string name="main_device_source_paired">paired</string>
+    <string name="main_device_source_discovered">discovered</string>
+    <string name="main_device_item">%1$s [%2$s - ..%3$s]</string>
+    <string name="main_connect_muse">Connect as Muse</string>
+    <string name="main_runtime_missing">Runtime Missing</string>
+    <string name="main_connect_divoom">Connect as Divoom</string>
+    <string name="main_disconnect_muse">Disconnect Muse</string>
+    <string name="main_disconnect_divoom">Disconnect Divoom</string>
+    <string name="main_send_frame">Send Frame</string>
+    <string name="main_auto_on">Auto: ON</string>
+    <string name="main_auto_off">Auto: OFF</string>
+    <string name="main_interval_100ms">100ms</string>
+    <string name="main_interval_150ms">150ms</string>
+    <string name="main_interval_200ms">200ms</string>
+    <string name="main_visualization_style">Visualization Style</string>
+    <string name="main_mode_oscilloscope">Oscilloscope</string>
+    <string name="main_mode_bubble">Bubble</string>
+    <string name="main_diagnostics">Diagnostics</string>
+    <string name="main_diagnostics_normalized">normalized=%1$s  packet=%2$d bytes</string>
+    <string name="main_diagnostics_muse_raw">museRaw: notif=%1$d (eeg=%2$d/other=%3$d)  lastPkt=%4$d bytes  eegSamples=%5$d</string>
+    <string name="main_diagnostics_muse_bands">museBands: alphaRatio=%1$s  dominantRatio=%2$s  totalPower=%3$s</string>
+    <string name="main_diagnostics_muse_bio">museBio: ppgSamples=%1$d  heart=%2$s bpm  oxygen=%3$s%%</string>
+    <string name="main_diagnostics_muse_activity">museActivity=%1$s  reconnectAttempt=%2$d</string>
+    <string name="main_diagnostics_packet_head">musePacketHead=%1$s</string>
+    <string name="main_ready">Ready: parameter-selectable Muse streaming with profile-aware power optimization.</string>
+    <string name="main_permissions_required">Grant Bluetooth permissions to connect Muse and Divoom.</string>
+</resources>
